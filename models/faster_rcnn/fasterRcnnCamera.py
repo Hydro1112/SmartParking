@@ -3,45 +3,63 @@ import torch
 import numpy as np
 from torchvision.transforms import functional as F
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from utils.readLicensePlate import readLicensePlate
-from utils.utils import visualize, get_car
+from utils.utils import visualize
 from datetime import datetime
 from sort.sort import Sort
 from ultralytics import YOLO
 import time
 
+# ---------------------- Config ----------------------
+CAM_W, CAM_H = 320, 320
+YOLO_CONF = 0.20
+PLATE_SCORE_THR = 0.80
+FRAME_SKIP_INTERVAL = 3
+VEHICLE_CLASSES = [2, 3]
+# -----------------------------------------------------
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Load model torchvision Faster R-CNN và weights train của bạn
-model = fasterrcnn_resnet50_fpn(weights=None)
-num_classes = 2
-in_features = model.roi_heads.box_predictor.cls_score.in_features
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
-model.load_state_dict(torch.load('models/faster_rcnn/faster_rcnn.pth', map_location=device))
-model.to(device)
-model.eval()
+def _tensor_from_bgr(img_bgr):
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    return F.to_tensor(img_rgb).to(device)
 
-mot_tracker = Sort()
-coco_model = YOLO('models/yolov8n.pt')
-vehicles = [2, 3, 5, 7]  # vehicle classes
+def _init_models():
+    """Tạo model YOLO và Faster R-CNN riêng cho mỗi camera."""
+    # Load Faster R-CNN
+    model_frcnn = fasterrcnn_resnet50_fpn(weights=None)
+    in_features = model_frcnn.roi_heads.box_predictor.cls_score.in_features
+    model_frcnn.roi_heads.box_predictor = FastRCNNPredictor(in_features, 2)
+    model_frcnn.load_state_dict(torch.load('models/faster_rcnn/faster_rcnn.pth', map_location=device))
+    model_frcnn.to(device).eval()
 
-def fasterRcnnRealTimeDetect():
-    cap = cv2.VideoCapture(0)
-    cap.set(3, 640)
-    cap.set(4, 480)
+    # Load YOLO
+    model_yolo = YOLO('models/yolov8n.pt')
+    YOLO_HALF = False
+    if device.type == 'cuda':
+        model_yolo.model.half()
+        YOLO_HALF = True
 
-    carPlate_dict = {}
-    detected_license_plates = []
+    return model_frcnn, model_yolo, YOLO_HALF
 
-    prev_frame_time = 0
+def _run_one_stream(cam_id, registered_file, log_file, event_label, frame_queue):
+    # Khởi tạo model riêng cho camera này
+    model_frcnn, model_yolo, YOLO_HALF = _init_models()
+    mot_tracker = Sort()
 
-    # Đọc file registered_car_plate.txt 1 lần ngoài vòng lặp
-    with open("resources/registered_car_plate.txt", 'r') as file:
-        registered_plates = set(line.strip() for line in file.readlines())
+    cap = cv2.VideoCapture(cam_id)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_W)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_H)
 
-    frame_skip_interval = 1  # mỗi 3 frame xử lý 1 lần
+    with open(registered_file, 'r') as f:
+        registered_plates = set(line.strip() for line in f.readlines())
+
+    prev_frame_time = 0.0
     frame_count = 0
+    car_plate_best = {}
+    recent_logged = []
+    last_plate_box = {}
 
     while True:
         ret, frame = cap.read()
@@ -49,97 +67,115 @@ def fasterRcnnRealTimeDetect():
             break
 
         frame_count += 1
-        if frame_count % frame_skip_interval != 0:
-            # Vẫn hiển thị FPS và frame nhưng không xử lý model
-            new_frame_time = time.time()
-            fps = 1/(new_frame_time - prev_frame_time + 1e-5)
-            prev_frame_time = new_frame_time
-            cv2.putText(frame, f"FPS: {fps:.1f}", (7, 70), cv2.FONT_HERSHEY_SIMPLEX, 2, (100,255,0), 3, cv2.LINE_AA)
-            cv2.imshow('RealTime license Plate System', frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+        if FRAME_SKIP_INTERVAL > 1 and (frame_count % FRAME_SKIP_INTERVAL != 0):
+            for car_id, (gx1, gy1, gx2, gy2, draw_text, last_seen) in last_plate_box.items():
+                if time.time() - last_seen < 1.0:
+                    visualize(frame, 1.0, draw_text, gx1, gy1, gx2, gy2)
+
+            new_t = time.time()
+            fps = 1.0 / (new_t - prev_frame_time + 1e-5)
+            prev_frame_time = new_t
+            cv2.putText(frame, f"FPS: {fps:.1f}", (7, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2, (100, 255, 0), 3)
+            frame_queue.put(frame)
             continue
 
-        start_time = time.time()
+        # YOLO detect vehicles
+        try:
+            yolo_kwargs = dict(verbose=False)
+            if YOLO_HALF:
+                yolo_kwargs['half'] = True
+            yolo_pred = model_yolo(frame, **yolo_kwargs)[0]
+        except Exception:
+            yolo_pred = model_yolo(frame, verbose=False)[0]
 
-        # Yolo detect vehicles
-        detections = coco_model(frame)[0]
-        detections_ = []
-        for detection in detections.boxes.data.tolist():
-            x1, y1, x2, y2, score, class_id = detection
-            if int(class_id) in vehicles and score > 0.3:
-                detections_.append([x1, y1, x2, y2, score])
+        dets = []
+        for det in yolo_pred.boxes.data.tolist():
+            x1, y1, x2, y2, score, class_id = det
+            if int(class_id) in VEHICLE_CLASSES and score >= YOLO_CONF:
+                dets.append([x1, y1, x2, y2, score])
 
-        detections_np = np.array(detections_).reshape(-1, 5) if detections_ else np.empty((0,5))
-        detections_bboxes = detections_np[:, :4] if len(detections_) > 0 else np.empty((0,4))
-        track_ids = mot_tracker.update(np.asarray(detections_bboxes))
+        if len(dets) > 0:
+            dets_np = np.array(dets, dtype=float)
+        else:
+            dets_np = np.empty((0, 5), dtype=float)
 
-        # Run Faster-RCNN on full frame (or you can optimize to run on vehicle bbox crop)
-        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img_tensor = F.to_tensor(img_rgb).to(device)
+        try:
+            track_ids = mot_tracker.update(dets_np)
+        except IndexError:
+            track_ids = np.empty((0, 5))
 
-        with torch.no_grad():
-            outputs = model([img_tensor])
-
-        scores = outputs[0]['scores'].cpu().numpy()
-        labels = outputs[0]['labels'].cpu().numpy()
-        boxes = outputs[0]['boxes'].cpu().numpy()
-
-        threshold = 0.8
-        for i, score in enumerate(scores):
-            if score < threshold:
+        # Faster R-CNN on cropped vehicle
+        for v in track_ids:
+            vx1, vy1, vx2, vy2, car_id = v.astype(int)
+            vx1 = max(vx1, 0); vy1 = max(vy1, 0)
+            vx2 = min(vx2, frame.shape[1]); vy2 = min(vy2, frame.shape[0])
+            if vx2 <= vx1 or vy2 <= vy1:
                 continue
-            if labels[i] != 1:  # chỉ class plate
+
+            vehicle_crop = frame[vy1:vy2, vx1:vx2]
+            if vehicle_crop.size == 0:
                 continue
 
-            x1, y1, x2, y2 = boxes[i].astype(int)
+            with torch.no_grad():
+                outputs = model_frcnn([_tensor_from_bgr(vehicle_crop)])
 
-            license_plate = (x1, y1, x2, y2, score, "")
-            xcar1, ycar1, xcar2, ycar2, car_id = get_car(license_plate, track_ids)
-            frameCopy = frame.copy()
+            scores = outputs[0]['scores'].detach().cpu().numpy()
+            labels = outputs[0]['labels'].detach().cpu().numpy()
+            boxes = outputs[0]['boxes'].detach().cpu().numpy()
 
-            licensePlate = "None"
-            license_plate_result = readLicensePlate(frameCopy, x1, y1, x2, y2)
+            found_plate = False
 
-            if car_id in carPlate_dict:
-                dict_license_plate, dict_license_plate_score = carPlate_dict[car_id][0]
-                licensePlate = dict_license_plate
+            for i, s in enumerate(scores):
+                if s < PLATE_SCORE_THR or labels[i] != 1:
+                    continue
+                px1, py1, px2, py2 = boxes[i].astype(int)
 
-                if dict_license_plate_score < license_plate_result[1]:
-                    carPlate_dict[car_id] = [(license_plate_result[0], license_plate_result[1])]
-                    visualize(frame, score, license_plate_result[0], x1, y1, x2, y2)
-                else:
-                    visualize(frame, score, dict_license_plate, x1, y1, x2, y2)
-            else:
-                if car_id != -1:
-                    if len(carPlate_dict) >= 10:
-                        carPlate_dict.pop(next(iter(carPlate_dict)))
-                    carPlate_dict[car_id] = [(license_plate_result[0], license_plate_result[1])]
-                visualize(frame, score, license_plate_result[0], x1, y1, x2, y2)
+                gx1 = vx1 + px1
+                gy1 = vy1 + py1
+                gx2 = vx2 - (vehicle_crop.shape[1] - px2)
+                gy2 = vy2 - (vehicle_crop.shape[0] - py2)
 
-            # So sánh với bộ biển đăng ký đã đọc 1 lần
-            licensePlate = license_plate_result[0]
-            if licensePlate in registered_plates:
-                auth_text = "Authorized..."
-                cv2.putText(frame, auth_text, (10, 400), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                with open("resources/entered_record.txt", "a") as file1:
-                    if len(detected_license_plates) == 0 or detected_license_plates[-1] != licensePlate:
-                        detected_license_plates.append(licensePlate)
-                        file1.write(f"Plate Number: {licensePlate} : Entered at {datetime.now()}\n")
+                plate_text, plate_conf = readLicensePlate(frame.copy(), gx1, gy1, gx2, gy2)
+                if car_id not in car_plate_best or car_plate_best[car_id][1] < plate_conf:
+                    car_plate_best[car_id] = (plate_text, plate_conf)
+
+                draw_text = plate_text if plate_text else car_plate_best.get(car_id, ("", 0.0))[0]
+                visualize(frame, s, draw_text, gx1, gy1, gx2, gy2)
+
+                last_plate_box[car_id] = (gx1, gy1, gx2, gy2, draw_text, time.time())
+                found_plate = True
+
+                if draw_text and draw_text in registered_plates:
+                    cv2.putText(frame, "Authorized...", (10, 400),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    if len(recent_logged) == 0 or recent_logged[-1] != draw_text:
+                        recent_logged.append(draw_text)
+                        if len(recent_logged) > 20:
+                            recent_logged.pop(0)
+                        with open(log_file, "a") as fo:
+                            fo.write(f"Plate Number: {draw_text} : {event_label} at {datetime.now()}\n")
+
+            if not found_plate and car_id in last_plate_box:
+                gx1, gy1, gx2, gy2, draw_text, last_seen = last_plate_box[car_id]
+                if time.time() - last_seen < 1.0:
+                    visualize(frame, 1.0, draw_text, gx1, gy1, gx2, gy2)
 
         # FPS
-        new_frame_time = time.time()
-        fps = 1/(new_frame_time - prev_frame_time + 1e-5)
-        prev_frame_time = new_frame_time
-        cv2.putText(frame, f"FPS: {fps:.1f}", (7, 70), cv2.FONT_HERSHEY_SIMPLEX, 2, (100,255,0), 3, cv2.LINE_AA)
+        new_t = time.time()
+        fps = 1.0 / (new_t - prev_frame_time + 1e-5)
+        prev_frame_time = new_t
+        cv2.putText(frame, f"FPS: {fps:.1f}", (7, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 2, (100, 255, 0), 3)
 
-        cv2.imshow('RealTime license Plate System', frame)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        frame_queue.put(frame)
 
     cap.release()
-    cv2.destroyAllWindows()
 
-if __name__ == "__main__":
-    fasterRcnnRealTimeDetect()
+def fasterRcnnRealTimeDetectIn(frame_queue):
+    _run_one_stream(0, "resources/registered_car_plate.txt",
+                    "resources/entered_record.txt", "Entered", frame_queue)
+
+def fasterRcnnRealTimeDetectOut(frame_queue):
+    _run_one_stream(1, "resources/registered_car_plate.txt",
+                    "resources/exited_record.txt", "Exited", frame_queue)

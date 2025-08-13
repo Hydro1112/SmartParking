@@ -1,78 +1,65 @@
 import easyocr
 import cv2
+import re
 
 reader = easyocr.Reader(['en'], gpu=True)
 
-def readLicensePlate (img,x1,y1,x2,y2) :
+def format_vn_plate(plate_text):
+    """
+    Chuẩn hoá biển số VN:
+    - Nếu có dạng 2 số + 1 chữ cái + (4-5 số) và không có '-', thêm '-'
+    """
+    if '-' in plate_text:
+        return plate_text
+    m = re.match(r"^(\d{2}[A-Z]{1,2})(\d{4,5})$", plate_text)
+    if m:
+        return m.group(1) + "-" + m.group(2)
+    return plate_text
 
-    img.shape[0]
+def readLicensePlate(img, x1, y1, x2, y2):
+    # Crop license plate
+    h, w = img.shape[:2]
+    newx1 = max(int(x1 - 3), 0)
+    newy1 = max(int(y1 - 3), 0)
+    newx2 = min(int(x2 + 3), w)
+    newy2 = min(int(y2 + 3), h)
 
-    # crop license plate
-    if (x1 - 3) >= 0:
-        newx1 = int(x1 - 3)
-    else:
-        newx1 = 0
-
-    if (y1 - 3) >= 0:
-        newy1 = int(y1 - 3)
-    else:
-        newy1 = 0
-
-    if (x2 + 3) <= img.shape[1]:
-        newx2 = int(x2 + 3)
-    else:
-        newx2 = img.shape[1]
-
-    if (y2 + 3) <= img.shape[0]:
-        newy2 = int(y2 + 3)
-    else:
-        newy2 = img.shape[0]
-
-    # crop out the license plate
-    license_plate_crop = img[newy1:newy2, newx1: newx2]
-    # process license plate
+    license_plate_crop = img[newy1:newy2, newx1:newx2]
     license_plate_crop_gray = cv2.cvtColor(license_plate_crop, cv2.COLOR_BGR2GRAY)
     license_plate_inverted = cv2.bitwise_not(license_plate_crop_gray)
-   # run easyocr
+
+    # OCR
     license_plate_detections = reader.readtext(license_plate_inverted)
-    license_plate_text = ' '
-    totalScore = 0.0
-    numOfDetection = 0
-    confScore = 0.0
-    if(len(license_plate_detections)>0):
-        license_plate_text = ''
-        textArray = []
-        for detection in license_plate_detections:
-            bbox, texts, score = detection
-            texts = texts.upper().replace(' ', '')
-            totalScore += score
-            numOfDetection +=1
-            print(texts)
-            print(score)
-            textArray.append(texts)
+    if not license_plate_detections:
+        return ["", 0.0]
 
-        while(len(textArray)!=0):
-           for texts in textArray:
-               if len(texts) > 0 and texts[0].isalpha():
-                   for text in texts:
-                       license_plate_text+=text
-                   textArray.remove(texts)
+    # Sắp xếp theo toạ độ Y (top-left)
+    license_plate_detections.sort(key=lambda det: det[0][0][1])
 
-           for texts in textArray:
-                   for text in texts:
-                       license_plate_text+=text
-                   textArray.remove(texts)
-        for text in license_plate_text:
-            if (text.isdigit()==False and text.isalpha()==False):
-                license_plate_text =""
-                confScore = 0.0
-                return [license_plate_text, confScore]
+    lines = []
+    for bbox, texts, score in license_plate_detections:
+        texts = texts.upper().replace(' ', '')
+        # Loại ký tự không hợp lệ
+        texts = re.sub(r'[^A-Z0-9]', '', texts)
+        if texts:
+            lines.append((texts, score))
 
-        if license_plate_text[0].isdigit():
-            license_plate_text = ""
-            confScore = 0.0
-            return [license_plate_text, confScore]
+    if not lines:
+        return ["", 0.0]
 
-        confScore = totalScore/numOfDetection
+    # Ghép 1 hoặc 2 dòng
+    if len(lines) == 1:
+        plate_text = lines[0][0]
+        confScore = lines[0][1]
+    else:
+        plate_text = lines[0][0] + "-" + lines[1][0]
+        confScore = (lines[0][1] + lines[1][1]) / 2
 
-    return [license_plate_text,confScore]
+    # Format chuẩn biển VN nếu cần
+    plate_text = format_vn_plate(plate_text)
+
+    # Validate
+    if plate_text and not plate_text[0].isdigit() and not plate_text[0].isalpha():
+        return ["", 0.0]
+
+    return [plate_text, confScore]
