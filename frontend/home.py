@@ -1,335 +1,167 @@
-# parking_dashboard_qt.py
 import sys
-from typing import Optional
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFrame, QProgressBar, QTableWidget, QTableWidgetItem, QPushButton,
-    QFileDialog, QSizePolicy, QAbstractItemView
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy,
+    QPushButton, QLabel, QStackedWidget, QFrame
 )
-from PySide6.QtGui import QFont, QColor, QPalette, QPixmap
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtMultimediaWidgets import QVideoWidget
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
+from PySide6.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve
+from PySide6.QtGui import QFont
+from PySide6.QtGui import QIcon
+from soatVe import SoatVePage
 
-# ---------------- THEME ----------------
-C_DARK   = "#13293d"   # sidebar / header
-C_BG     = "#006494"   # main background
-C_CARD   = "#247ba0"   # standard card
-C_HILITE = "#1b98e0"   # highlight card
-C_LIGHT  = "#e8f1f2"   # light text/lines
-
-
-# ----------------- Reusable Widgets -----------------------
-class Card(QFrame):
-    def __init__(self, title: Optional[str] = None, bg=C_CARD, radius=14, padding=12, title_bg=C_DARK):
-        super().__init__()
-        self.setObjectName("Card")
-        self.setStyleSheet(f'''
-            QFrame#Card {{
-                background-color: {bg};
-                border-radius: {radius}px;
-            }}
-        ''')
-        self.v = QVBoxLayout(self)
-        self.v.setContentsMargins(padding, padding, padding, padding)
-        self.v.setSpacing(10)
-        if title:
-            tb = QFrame()
-            tb.setStyleSheet(f"background-color: {title_bg}; border-radius: 10px;")
-            tl = QHBoxLayout(tb)
-            tl.setContentsMargins(12, 8, 12, 8)
-            t = QLabel(title)
-            t.setStyleSheet("color: white;")
-            t.setFont(QFont("Inter, Arial", 16, QFont.Bold))
-            tl.addWidget(t)
-            self.v.addWidget(tb)
-
-
-class PieChart(FigureCanvas):
-    def __init__(self, data, labels, colors):
-        fig = Figure(figsize=(2.8, 2.8), dpi=100)
-        super().__init__(fig)
-        ax = fig.add_subplot(111)
-        ax.pie(
-            data, labels=None, autopct='%1.0f%%', startangle=90,
-            colors=colors, pctdistance=0.7, textprops={'color': 'white', 'fontsize': 12}
-        )
-        ax.axis('equal')
-        fig.tight_layout()
-
-
-class LegendDot(QFrame):
-    def __init__(self, text, color):
-        super().__init__()
-        h = QHBoxLayout(self)
-        h.setContentsMargins(0, 0, 0, 0)
-        swatch = QFrame()
-        swatch.setFixedSize(16, 16)
-        swatch.setStyleSheet(f"background-color:{color}; border-radius:4px;")
-        lbl = QLabel(text)
-        lbl.setStyleSheet("color: white;")
-        lbl.setFont(QFont("Inter, Arial", 12))
-        h.addWidget(swatch)
-        h.addSpacing(8)
-        h.addWidget(lbl)
-        h.addStretch(1)
-
-
-class VideoCard(Card):
-    def __init__(self, title: Optional[str] = None, bg=C_CARD):
-        super().__init__(title=title, bg=bg)
-        self.video = QVideoWidget()
-        self.video.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.v.addWidget(self.video)
-
-        controls = QHBoxLayout()
-        self.btnLoad = QPushButton("Chọn video…")
-        self.btnLoad.setStyleSheet(f'''
-            QPushButton {{
-                background-color: {C_HILITE};
-                color: white;
+class SidebarButton(QPushButton):
+    def __init__(self, text, icon_path=None, parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setCheckable(True)
+        if icon_path:
+            self.setIcon(QIcon(icon_path))
+        self.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #ffffff;
                 border: none;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{ opacity: 0.95; }}
-        ''')
-        controls.addWidget(self.btnLoad, 0, Qt.AlignLeft)
-        controls.addStretch(1)
-        self.v.addLayout(controls)
+                padding: 12px;
+                text-align: center;
+                font-size: 25px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.1);
+            }
+            QPushButton:checked {
+                font-weight: bold;
+            }
+        """)
 
-        self.player = QMediaPlayer()
-        self.audio = QAudioOutput()
-        self.player.setAudioOutput(self.audio)
-        self.player.setVideoOutput(self.video)
-        self.player.mediaStatusChanged.connect(self._handle_media_status)
+class Sidebar(QWidget):
+    def __init__(self, items, on_click=None, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(220)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.setStyleSheet("background-color: #13293d;")
 
-        self.btnLoad.clicked.connect(self._choose_file)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-    def _choose_file(self):
-        f, _ = QFileDialog.getOpenFileName(
-            self, "Chọn video demo", "", "Video (*.mp4 *.avi *.mov *.mkv)"
-        )
-        if f:
-            self.player.setSource(QUrl.fromLocalFile(f))
-            self.player.play()
+        # Header / Logo
+        header = QLabel("🚗 Smart Parking")
+        header.setStyleSheet("color: white; font-size: 18px; font-weight: bold; padding: 16px;")
+        header.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(header)
 
-    def _handle_media_status(self, status):
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            self.player.setPosition(0)
-            self.player.play()
+        # Container for buttons
+        btn_container = QWidget()
+        btn_layout = QVBoxLayout(btn_container)
+        btn_layout.setContentsMargins(0, 10, 0, 0)
+        btn_layout.setSpacing(0)
+        main_layout.addWidget(btn_container)
+
+        # Highlight bar
+        self.highlight = QFrame(self)
+        self.highlight.setStyleSheet("background-color: #1b98e0; border-radius: 3px;")
+        self.highlight.setGeometry(QRect(0, 60, 6, 40))
+        self.anim = QPropertyAnimation(self.highlight, b"geometry")
+        self.anim.setDuration(250)
+        
+        self.anim = QPropertyAnimation(self.highlight, b"geometry")
+        self.anim.setDuration(300)  # Thời gian animation (ms)
+        self.anim.setEasingCurve(QEasingCurve.InOutCubic)  # Kiểu chuyển động
 
 
-# ----------------- Main Window -----------------------
-class ParkingDashboard(QWidget):
+        # Buttons
+        self.buttons = []
+        for item in items:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                text, icon = item
+            else:
+                text, icon = item, None
+
+            btn = SidebarButton(text, icon)
+            index = len(self.buttons)  # lấy index đúng của button
+            btn.clicked.connect(lambda checked, b=btn, i=index: (
+                self.set_active_button(b),
+                on_click(i) if on_click else None
+            ))
+            btn_layout.addWidget(btn)
+            self.buttons.append(btn)
+
+        btn_layout.addStretch(1)
+
+        # Footer
+        footer = QLabel("⚙️ Cài đặt | ⏻ Thoát")
+        footer.setStyleSheet("color: gray; font-size: 13px; padding: 10px;")
+        footer.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(footer)
+
+        if self.buttons:
+            self.set_active_button(self.buttons[0])
+
+    def set_active_button(self, active_btn):
+        for btn in self.buttons:
+            btn.setChecked(False)
+        active_btn.setChecked(True)
+
+        # Lấy vị trí tuyệt đối của nút trong Sidebar
+        global_pos = active_btn.mapTo(self, active_btn.rect().topLeft())
+        y = global_pos.y()
+
+        self.anim.stop()
+        self.anim.setStartValue(self.highlight.geometry())
+        self.anim.setEndValue(QRect(0, y, 6, active_btn.height()))
+        self.anim.start()
+
+
+class ParkingDashboard(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Giám sát bãi")
-        self.resize(1400, 800)
+        self.setWindowTitle("Smart Parking Dashboard")
+        self.resize(900, 600)
 
-        self.setAutoFillBackground(True)
-        pal = self.palette()
-        pal.setColor(QPalette.Window, QColor(C_BG))
-        self.setPalette(pal)
-
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # Sidebar
-        sidebar = QFrame()
-        sidebar.setFixedWidth(180)
-        sidebar.setStyleSheet(f"background-color:{C_DARK}; color:white;")
-        s = QVBoxLayout(sidebar)
-        s.setContentsMargins(16, 36, 16, 36)
-        s.setSpacing(28)
-        for txt in ["Bãi đỗ", "Thống kê", "Dữ liệu"]:
-            lbl = QLabel(txt)
-            lbl.setFont(QFont("Inter, Arial", 20, QFont.Black))
-            lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            s.addWidget(lbl)
-        s.addStretch(1)
+        self.sidebar = Sidebar(
+            ["Soát vé", "Thống kê", "Giám sát", "Dữ liệu"],
+            self.handle_sidebar_click,
+            parent=self
+        )
+        self.sidebar.setStyleSheet("background-color: #0A2A43;")
+        self.sidebar.setFixedWidth(180)
+        
+        self.pages = QStackedWidget()
+        self.soatve_page = SoatVePage()                    # <-- dùng trang thật
+        self.thongke_page = self.create_page("Trang Thống kê")
+        self.giamsat_page = self.create_page("Trang Giám sát")
+        self.dulieu_page = self.create_page("Trang Dữ liệu")
 
-        # Main
-        main = QFrame()
-        main.setStyleSheet(f"background-color:{C_BG};")
-        m = QVBoxLayout(main)
-        m.setContentsMargins(16, 10, 16, 16)
-        m.setSpacing(10)
+        self.pages.addWidget(self.soatve_page)   # index 0
+        self.pages.addWidget(self.thongke_page)  # index 1
+        self.pages.addWidget(self.giamsat_page)  # index 2
+        self.pages.addWidget(self.dulieu_page)   # index 3
 
-        title = QLabel("Giám sát bãi")
-        title.setAlignment(Qt.AlignCenter)
-        title.setFont(QFont("Inter, Arial", 20, QFont.Black))
-        title.setStyleSheet("color:white;")
-        m.addWidget(title)
+        layout.addWidget(self.sidebar)
+        layout.addWidget(self.pages)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
-        m.addLayout(grid, 1)
+        # Mặc định mở Soát vé
+        self.pages.setCurrentIndex(0)
 
-        # Row 1: camera - progress+pie - camera
-        cam_left  = VideoCard(bg=C_CARD)
-        cam_right = VideoCard(bg=C_CARD)
-        cam_left.setMinimumHeight(250)
-        cam_right.setMinimumHeight(250)
+    def create_page(self, text):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        label = QLabel(text)
+        label.setFont(QFont("Arial", 16, QFont.Bold))
+        layout.addWidget(label, alignment=Qt.AlignCenter)
+        return page
 
-        mid = Card(bg=C_HILITE, radius=14, padding=14)
-
-        def progress_row(pct, label_text, emoji):
-            row = QVBoxLayout()
-            head = QHBoxLayout()
-            lblpct = QLabel(f"{pct}%")
-            lblpct.setStyleSheet("color:white;")
-            lblpct.setFont(QFont("Inter, Arial", 15, QFont.Black))
-            head.addWidget(lblpct)
-            head.addStretch(1)
-            ic = QLabel(emoji)
-            ic.setFixedWidth(22)
-            head.addWidget(ic)
-            row.addLayout(head)
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(pct)
-            bar.setTextVisible(False)
-            bar.setFixedHeight(16)
-            bar.setStyleSheet(f'''
-                QProgressBar {{
-                    background-color: rgba(0,0,0,0.25);
-                    border-radius: 8px;
-                }}
-                QProgressBar::chunk {{
-                    background-color: {C_DARK};
-                    border-radius: 8px;
-                }}
-            ''')
-            row.addWidget(bar)
-            sub = QLabel(label_text)
-            sub.setStyleSheet("color:white;")
-            row.addWidget(sub)
-            return row
-
-        leftcol = QVBoxLayout()
-        leftcol.addLayout(progress_row(40, "Đã chiếm 40/100 chỗ xe máy", "🛵"))
-        leftcol.addSpacing(8)
-        leftcol.addLayout(progress_row(60, "Đã chiếm 60/100 chỗ ô tô", "🚗"))
-        leftcol.addStretch(1)
-
-        pie = PieChart([75, 25], ["Xe máy", "Ô tô"], [C_DARK, C_BG])
-        legend_wrap = QVBoxLayout()
-        legend_wrap.addWidget(LegendDot("Tỷ lệ loại xe", "transparent"))
-        legend_wrap.addSpacing(4)
-        legend_wrap.addWidget(LegendDot("Xe máy", C_DARK))
-        legend_wrap.addWidget(LegendDot("Ô tô", C_BG))
-        legend_wrap.addStretch(1)
-        legend_frame = QFrame()
-        legend_frame.setLayout(legend_wrap)
-
-        midrow = QHBoxLayout()
-        midrow.addLayout(leftcol, 3)
-        midrow.addWidget(pie, 2)
-        midrow.addWidget(legend_frame, 1)
-        mid.v.addLayout(midrow)
-
-        grid.addWidget(cam_left,  0, 0, 1, 1)
-        grid.addWidget(mid,       0, 1, 1, 2)
-        grid.addWidget(cam_right, 0, 3, 1, 1)
-
-        # Row 2-3: Xe vào / Xe ra + camera
-        xe_vao = Card(title="Xe vào", bg=C_CARD)
-        xe_vao_text = QLabel("Thời gian vào: 21:00 11/08/2025\nLoại xe: Xe máy\nVé: XM001")
-        xe_vao_text.setStyleSheet(f"color:{C_LIGHT};")
-        xe_vao.v.addWidget(xe_vao_text)
-        plate_left = QLabel()
-        plate_left.setAlignment(Qt.AlignCenter)
-        plate_left.setFixedHeight(120)
-        xe_vao.v.addWidget(plate_left)
-        cap_vao = QLabel("Biển số:\n29 - G1 333.33")
-        cap_vao.setAlignment(Qt.AlignCenter)
-        cap_vao.setStyleSheet("color:white; font-weight:700;")
-        xe_vao.v.addWidget(cap_vao)
-
-        xe_ra = Card(title="Xe ra", bg=C_CARD)
-        xe_ra_text = QLabel("Thời gian ra: 21:00 11/08/2025\nThời gian giữ xe: 4h25p\nGiá vé: 10.000 VND\nLoại xe: Ô tô\nVé: OT001")
-        xe_ra_text.setStyleSheet(f"color:{C_LIGHT};")
-        xe_ra.v.addWidget(xe_ra_text)
-        plate_right = QLabel()
-        plate_right.setAlignment(Qt.AlignCenter)
-        plate_right.setFixedHeight(120)
-        xe_ra.v.addWidget(plate_right)
-        cap_ra = QLabel("Biển số: 30G 493.44")
-        cap_ra.setAlignment(Qt.AlignCenter)
-        cap_ra.setStyleSheet("color:white; font-weight:700;")
-        xe_ra.v.addWidget(cap_ra)
-
-        mid_cam_in  = VideoCard(bg=C_CARD)
-        mid_cam_out = VideoCard(bg=C_CARD)
-
-        grid.addWidget(xe_vao,      1, 0, 2, 1)
-        grid.addWidget(mid_cam_in,  1, 1, 1, 1)
-        grid.addWidget(mid_cam_out, 1, 2, 1, 1)
-        grid.addWidget(xe_ra,       1, 3, 2, 1)
-
-        # Row 3: Table
-        recent = Card(bg=C_HILITE)
-        header = QFrame()
-        header.setStyleSheet(f"background-color:{C_BG}; border-radius: 10px;")
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(12, 8, 12, 8)
-        htxt = QLabel("Xe gần đây")
-        htxt.setStyleSheet("color:white; font-weight:700;")
-        hl.addWidget(htxt)
-        recent.v.addWidget(header)
-
-        table = QTableWidget(3, 3)
-        table.setHorizontalHeaderLabels(["Biển số", "Trạng thái", "Thời gian"])
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        table.setSelectionMode(QAbstractItemView.NoSelection)
-
-        rows = [
-            ("20 - G1 123.44", "Ra", "20:59"),
-            ("20 - G1 123.45", "Vào", "20:58"),
-            ("29 - G1 333.33", "Vào", "20:55"),
-        ]
-        for r, row in enumerate(rows):
-            for c, val in enumerate(row):
-                item = QTableWidgetItem(val)
-                item.setTextAlignment(Qt.AlignCenter)
-                table.setItem(r, c, item)
-
-        table.setStyleSheet(f'''
-            QHeaderView::section {{
-                background-color: {C_DARK};
-                color: white;
-                padding: 6px;
-                border: none;
-            }}
-            QTableWidget {{
-                background-color: transparent;
-                color: white;
-                gridline-color: {C_LIGHT};
-            }}
-        ''')
-        table.resizeColumnsToContents()
-        recent.v.addWidget(table)
-
-        grid.addWidget(recent, 2, 1, 1, 2)
-
-        # Compose
-        root.addWidget(sidebar)
-        root.addWidget(main, 1)
-
-
-def main():
-    app = QApplication(sys.argv)
-    w = ParkingDashboard()
-    w.show()
-    sys.exit(app.exec())
+    def handle_sidebar_click(self, index):
+        self.pages.setCurrentIndex(index)
 
 
 if __name__ == "__main__":
-    main()
+    app = QApplication(sys.argv)
+    win = ParkingDashboard()
+    win.show()
+    sys.exit(app.exec())
