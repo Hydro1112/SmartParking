@@ -1,14 +1,23 @@
+# database.py
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
-DB_PATH = "parking.db"
+# Đường dẫn DB cố định nằm cùng thư mục
+DB_PATH = Path(__file__).parent / "parking.db"
+
+
+def get_connection():
+    """Tạo connection tới DB."""
+    return sqlite3.connect(DB_PATH)
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    """Khởi tạo các bảng nếu chưa tồn tại."""
+    conn = get_connection()
     cursor = conn.cursor()
 
-    # Danh sách xe đăng ký
+    # Bảng biển số đăng ký
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS registered (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16,7 +25,7 @@ def init_db():
         )
     ''')
 
-    # Lịch sử ra/vào (lưu cả car_id từ SORT)
+    # Bảng lịch sử vào/ra
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,13 +36,31 @@ def init_db():
         )
     ''')
 
+    # Bảng vé xe
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tickets (
+            id TEXT PRIMARY KEY,
+            plate TEXT,
+            vehicle_type TEXT,   -- motor/car
+            ticket_type TEXT,    -- hourly/overnight/monthly
+            entry_time TEXT,     -- ISO
+            exit_time  TEXT,     -- ISO or NULL
+            amount REAL DEFAULT 0,
+            status TEXT          -- active/closed/cancelled
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
 
+# ========================
+# Các hàm thao tác dữ liệu
+# ========================
+
 def insert_plate_event(car_id: int, plate: str, camera: str):
     """Thêm sự kiện mới vào bảng history."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         '''
@@ -47,8 +74,8 @@ def insert_plate_event(car_id: int, plate: str, camera: str):
 
 
 def update_plate_event(car_id: int, new_plate: str):
-    """Cập nhật lại biển số cho car_id (chỉ giữ 1 record duy nhất/xe)."""
-    conn = sqlite3.connect(DB_PATH)
+    """Cập nhật biển số cho car_id trong history."""
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         '''
@@ -63,8 +90,8 @@ def update_plate_event(car_id: int, new_plate: str):
 
 
 def get_registered_plates():
-    """Lấy danh sách biển số đã đăng ký (trả về set)."""
-    conn = sqlite3.connect(DB_PATH)
+    """Lấy danh sách biển số đã đăng ký (set)."""
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT plate FROM registered")
     rows = [r[0] for r in cursor.fetchall()]
@@ -74,7 +101,7 @@ def get_registered_plates():
 
 def register_plate(plate: str):
     """Đăng ký biển số mới (nếu chưa có)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         "INSERT OR IGNORE INTO registered (plate) VALUES (?)", (plate,)
@@ -85,7 +112,7 @@ def register_plate(plate: str):
 
 def get_all_history():
     """Lấy toàn bộ lịch sử ra/vào (mới nhất trước)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         "SELECT car_id, plate, camera, timestamp FROM history ORDER BY timestamp DESC"

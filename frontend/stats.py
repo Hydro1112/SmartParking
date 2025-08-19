@@ -40,23 +40,6 @@ DB_PATH = "parking.db"
 PARKING_CAPACITY = 200  # sức chứa bãi (config)
 
 # ----------------- Helpers -----------------------
-def ensure_db():
-    con = sqlite3.connect(DB_PATH)
-    cur = con.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS tickets(
-        id TEXT PRIMARY KEY,
-        plate TEXT,
-        vehicle_type TEXT,   -- motor/car
-        ticket_type TEXT,    -- hourly/overnight/monthly
-        entry_time TEXT,     -- ISO
-        exit_time  TEXT,     -- ISO or NULL
-        amount REAL DEFAULT 0,
-        status TEXT          -- active/closed/cancelled
-    )
-    """)
-    con.commit()
-    con.close()
 
 def df_query(sql: str, params=()):
     con = sqlite3.connect(DB_PATH)

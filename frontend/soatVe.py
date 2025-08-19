@@ -162,10 +162,11 @@ class SoatVePage(QWidget):
         m.addLayout(grid, 1)
 
         # Row 1: camera - progress+pie - camera
-        cam_left  = VideoCard(bg=C_CARD)
-        cam_right = VideoCard(bg=C_CARD)
-        cam_left.setMinimumHeight(250)
-        cam_right.setMinimumHeight(250)
+        self.cam_left  = VideoCard(bg=C_CARD)
+        self.cam_right = VideoCard(bg=C_CARD)
+
+        self.mid_cam_in  = VideoCard(bg=C_CARD)
+        self.mid_cam_out = VideoCard(bg=C_CARD)
 
         mid = Card(bg=C_HILITE, radius=14, padding=14)
 
@@ -224,9 +225,9 @@ class SoatVePage(QWidget):
         midrow.addWidget(legend_frame, 1)
         mid.v.addLayout(midrow)
 
-        grid.addWidget(cam_left,  0, 0, 1, 1)
+        grid.addWidget(self.cam_left,  0, 0, 1, 1)
         grid.addWidget(mid,       0, 1, 1, 2)
-        grid.addWidget(cam_right, 0, 3, 1, 1)
+        grid.addWidget(self.cam_right, 0, 3, 1, 1)
 
         # Row 2-3: Xe vào / Xe ra + camera
         xe_vao = Card(title="Xe vào", bg=C_CARD)
