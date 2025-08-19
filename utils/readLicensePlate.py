@@ -1,23 +1,46 @@
-import easyocr
 import cv2
 import re
+import torch
+import torch.nn.functional as F
+from vietocr.tool.predictor import Predictor
+from vietocr.tool.config import Cfg
+from PIL import Image
 
-reader = easyocr.Reader(['en'], gpu=True)
+_predictor = None  # Biến global, lưu model VietOCR
 
-def format_vn_plate(plate_text):
+def get_ocr():
+    """
+    Lazy initialization cho VietOCR, chỉ load model 1 lần duy nhất
+    """
+    global _predictor
+    if _predictor is None:
+        config = Cfg.load_config_from_name('vgg_transformer')
+        config['weights'] = 'D:/GitHub/Dataset/weights/transformerocr.pth'  # đường dẫn model đã train
+        config['device'] = 'cuda'  # hoặc 'cpu' nếu không có GPU
+        _predictor = Predictor(config)
+    return _predictor
+
+
+def format_vn_plate(plate_text: str) -> str:
     """
     Chuẩn hoá biển số VN:
-    - Nếu có dạng 2 số + 1 chữ cái + (4-5 số) và không có '-', thêm '-'
+    - Nếu có dạng 2 số + 1-2 chữ cái + (4-5 số) và không có '-', thêm '-'
     """
-    if '-' in plate_text:
+    plate_text = plate_text.strip().upper()
+    plate_text = plate_text.replace(" ", "").replace("_", "-")
+    if "-" in plate_text:
         return plate_text
     m = re.match(r"^(\d{2}[A-Z]{1,2})(\d{4,5})$", plate_text)
     if m:
         return m.group(1) + "-" + m.group(2)
     return plate_text
 
+
 def readLicensePlate(img, x1, y1, x2, y2):
-    # Crop license plate
+    """
+    Cắt ảnh theo toạ độ và OCR biển số bằng VietOCR
+    Trả về [plate_text, confidence]
+    """
     h, w = img.shape[:2]
     newx1 = max(int(x1 - 3), 0)
     newy1 = max(int(y1 - 3), 0)
@@ -25,41 +48,27 @@ def readLicensePlate(img, x1, y1, x2, y2):
     newy2 = min(int(y2 + 3), h)
 
     license_plate_crop = img[newy1:newy2, newx1:newx2]
-    license_plate_crop_gray = cv2.cvtColor(license_plate_crop, cv2.COLOR_BGR2GRAY)
-    license_plate_inverted = cv2.bitwise_not(license_plate_crop_gray)
 
-    # OCR
-    license_plate_detections = reader.readtext(license_plate_inverted)
-    if not license_plate_detections:
-        return ["", 0.0]
+    # Convert OpenCV (BGR numpy array) -> PIL (RGB)
+    license_plate_crop_rgb = cv2.cvtColor(license_plate_crop, cv2.COLOR_BGR2RGB)
+    license_plate_pil = Image.fromarray(license_plate_crop_rgb)
 
-    # Sắp xếp theo toạ độ Y (top-left)
-    license_plate_detections.sort(key=lambda det: det[0][0][1])
+    predictor = get_ocr()
 
-    lines = []
-    for bbox, texts, score in license_plate_detections:
-        texts = texts.upper().replace(' ', '')
-        # Loại ký tự không hợp lệ
-        texts = re.sub(r'[^A-Z0-9]', '', texts)
-        if texts:
-            lines.append((texts, score))
+    # Lấy text
+    plate_text = predictor.predict(license_plate_pil)
 
-    if not lines:
-        return ["", 0.0]
+    # Lấy confidence gần đúng từ logits
+    try:
+        raw_logits = predictor.predict_raw(license_plate_pil)  # List[Tensor]
+        probs = [F.softmax(logit, dim=-1) for logit in raw_logits]
+        max_probs = [p.max().item() for p in probs]
+        confidence = float(torch.tensor(max_probs).prod())
+    except Exception:
+        confidence = 0.0  # fallback nếu predict_raw không thành công
 
-    # Ghép 1 hoặc 2 dòng
-    if len(lines) == 1:
-        plate_text = lines[0][0]
-        confScore = lines[0][1]
-    else:
-        plate_text = lines[0][0] + "-" + lines[1][0]
-        confScore = (lines[0][1] + lines[1][1]) / 2
-
-    # Format chuẩn biển VN nếu cần
+    # Làm sạch & chuẩn hóa format
+    plate_text = re.sub(r"[^A-Z0-9]", "", plate_text.upper())
     plate_text = format_vn_plate(plate_text)
 
-    # Validate
-    if plate_text and not plate_text[0].isdigit() and not plate_text[0].isalpha():
-        return ["", 0.0]
-
-    return [plate_text, confScore]
+    return [plate_text, confidence]
