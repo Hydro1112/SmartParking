@@ -14,3 +14,4 @@ resources/image/output/yolo/detection.jpg
 Testing/video.mp4
 models/faster_rcnn/faster_rcnn.pth
 models/yolo/models/yolov8n.pt
+.vscode
