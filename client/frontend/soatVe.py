@@ -76,16 +76,18 @@ class LegendDot(QFrame):
         h.addSpacing(8)
         h.addWidget(lbl)
         h.addStretch(1)
-
-
 class VideoCard(Card):
     def __init__(self, title: Optional[str] = None, bg=C_CARD):
         super().__init__(title=title, bg=bg)
-        self.video = QVideoWidget()
+
+        # QLabel để hiển thị webcam
+        self.video = QLabel("Đang khởi tạo camera...")
+        self.video.setAlignment(Qt.AlignCenter)
         self.video.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video.setStyleSheet("background-color: black; color: white; font-size:14px;")
         self.v.addWidget(self.video)
 
-        controls = QHBoxLayout()
+        # Nếu muốn vẫn giữ nút chọn video demo (không cần QMediaPlayer)
         self.btnLoad = QPushButton("Chọn video…")
         self.btnLoad.setStyleSheet(f'''
             QPushButton {{
@@ -98,31 +100,15 @@ class VideoCard(Card):
             }}
             QPushButton:hover {{ opacity: 0.95; }}
         ''')
-        controls.addWidget(self.btnLoad, 0, Qt.AlignLeft)
-        controls.addStretch(1)
-        self.v.addLayout(controls)
-
-        self.player = QMediaPlayer()
-        self.audio = QAudioOutput()
-        self.player.setAudioOutput(self.audio)
-        self.player.setVideoOutput(self.video)
-        self.player.mediaStatusChanged.connect(self._handle_media_status)
-
+        self.v.addWidget(self.btnLoad)
         self.btnLoad.clicked.connect(self._choose_file)
 
     def _choose_file(self):
-        f, _ = QFileDialog.getOpenFileName(
-            self, "Chọn video demo", "", "Video (*.mp4 *.avi *.mov *.mkv)"
-        )
+        # Bạn có thể dùng để chọn video demo, nhưng hiện frame từ webcam vẫn hiển thị
+        from PySide6.QtWidgets import QFileDialog
+        f, _ = QFileDialog.getOpenFileName(self, "Chọn video demo", "", "Video (*.mp4 *.avi *.mov *.mkv)")
         if f:
-            self.player.setSource(QUrl.fromLocalFile(f))
-            self.player.play()
-
-    def _handle_media_status(self, status):
-        if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            self.player.setPosition(0)
-            self.player.play()
-
+            self.video.setText(f"Đã chọn video: {f}")
 
 # ----------------- Main Window -----------------------
 class SoatVePage(QWidget):

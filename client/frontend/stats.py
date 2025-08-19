@@ -37,7 +37,7 @@ C_CARD   = "#247ba0"   # standard card
 C_HILITE = "#1b98e0"   # highlight card
 C_LIGHT  = "#e8f1f2"   # light text/lines
 
-DB_PATH = "parking.db"
+DB_PATH = "server/parking.db"
 PARKING_CAPACITY = 200  # sức chứa bãi (config)
 
 # ----------------- Helpers -----------------------
