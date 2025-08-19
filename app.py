@@ -14,12 +14,12 @@ from models.faster_rcnn.fasterRcnnCamera import (
 from database import init_db
 init_db()
 
+
 # Queue để nhận frame từ thread camera
 queue_in = queue.Queue(maxsize=1)
 queue_out = queue.Queue(maxsize=1)
 
 def camera_exists(cam_id: int) -> bool:
-    """Kiểm tra camera có kết nối không."""
     cap = cv2.VideoCapture(cam_id)
     ok = cap.isOpened()
     cap.release()
@@ -29,30 +29,28 @@ class App(ParkingDashboard):
     def __init__(self):
         super().__init__()
 
-        # Xóa widget mặc định
-        self.soatve_page.cam_left.v.takeAt(0).widget().deleteLater()
-        self.soatve_page.cam_right.v.takeAt(0).widget().deleteLater()
+        # Thay thế widget video trong dashboard
+        self.cam_left.v.takeAt(0).widget().deleteLater()
+        self.cam_right.v.takeAt(0).widget().deleteLater()
 
-# Thêm QLabel thay thế
-        self.video_label_in = QLabel("Không kết nối được Camera Vào")
+        self.video_label_in = QLabel("Không tìm thấy Camera Vào")
         self.video_label_in.setAlignment(Qt.AlignCenter)
-        self.soatve_page.cam_left.v.addWidget(self.video_label_in)
+        self.cam_left.v.addWidget(self.video_label_in)
 
-        self.video_label_out = QLabel("Không kết nối được Camera Ra")
+        self.video_label_out = QLabel("Không tìm thấy Camera Ra")
         self.video_label_out.setAlignment(Qt.AlignCenter)
-        self.soatve_page.cam_right.v.addWidget(self.video_label_out)
+        self.cam_right.v.addWidget(self.video_label_out)
 
-
-        # Kiểm tra camera
+        # Kiểm tra camera và khởi động thread tương ứng
         self.has_cam_in = camera_exists(0)
         self.has_cam_out = camera_exists(1)
 
         if self.has_cam_in:
-            self.video_label_in.setText("Camera Vào - Đang kết nối...")
+            self.video_label_in.setText("Camera Vào")
             Thread(target=fasterRcnnRealTimeDetectIn, args=(queue_in,), daemon=True).start()
 
         if self.has_cam_out:
-            self.video_label_out.setText("Camera Ra - Đang kết nối...")
+            self.video_label_out.setText("Camera Ra")
             Thread(target=fasterRcnnRealTimeDetectOut, args=(queue_out,), daemon=True).start()
 
         # Timer cập nhật frame
@@ -61,7 +59,6 @@ class App(ParkingDashboard):
         self.timer.start(30)
 
     def update_frames(self):
-        """Cập nhật hình ảnh từ camera nếu có."""
         if self.has_cam_in:
             self._update_label_from_queue(self.video_label_in, queue_in)
         if self.has_cam_out:
@@ -78,7 +75,6 @@ class App(ParkingDashboard):
                 label.width(), label.height(), Qt.KeepAspectRatio))
         except queue.Empty:
             pass
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
