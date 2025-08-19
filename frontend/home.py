@@ -7,6 +7,8 @@ from PySide6.QtCore import Qt, QPropertyAnimation, QRect, QEasingCurve
 from PySide6.QtGui import QFont
 from PySide6.QtGui import QIcon
 from soatVe import SoatVePage
+from stats import StatsPage
+
 
 class SidebarButton(QPushButton):
     def __init__(self, text, icon_path=None, parent=None):
@@ -132,8 +134,8 @@ class ParkingDashboard(QMainWindow):
         self.sidebar.setFixedWidth(180)
         
         self.pages = QStackedWidget()
-        self.soatve_page = SoatVePage()                    # <-- dùng trang thật
-        self.thongke_page = self.create_page("Trang Thống kê")
+        self.soatve_page = SoatVePage()             
+        self.thongke_page = StatsPage()
         self.giamsat_page = self.create_page("Trang Giám sát")
         self.dulieu_page = self.create_page("Trang Dữ liệu")
 
