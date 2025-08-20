@@ -151,8 +151,8 @@ class SoatVePage(QWidget):
         self.cam_left  = VideoCard(bg=C_CARD)
         self.cam_right = VideoCard(bg=C_CARD)
 
-        self.mid_cam_in  = VideoCard(bg=C_CARD)
-        self.mid_cam_out = VideoCard(bg=C_CARD)
+        # self.mid_cam_in  = VideoCard(bg=C_CARD)
+        # self.mid_cam_out = VideoCard(bg=C_CARD)
 
         mid = Card(bg=C_HILITE, radius=14, padding=14)
 
@@ -242,12 +242,12 @@ class SoatVePage(QWidget):
         cap_ra.setStyleSheet("color:white; font-weight:700;")
         xe_ra.v.addWidget(cap_ra)
 
-        mid_cam_in  = VideoCard(bg=C_CARD)
-        mid_cam_out = VideoCard(bg=C_CARD)
+        self.mid_cam_in  = VideoCard(bg=C_CARD)
+        self.mid_cam_out = VideoCard(bg=C_CARD)
 
         grid.addWidget(xe_vao,      1, 0, 2, 1)
-        grid.addWidget(mid_cam_in,  1, 1, 1, 1)
-        grid.addWidget(mid_cam_out, 1, 2, 1, 1)
+        grid.addWidget(self.mid_cam_in,  1, 1, 1, 1)
+        grid.addWidget(self.mid_cam_out, 1, 2, 1, 1)
         grid.addWidget(xe_ra,       1, 3, 2, 1)
 
         # Row 3: Table

@@ -2,6 +2,7 @@ import cv2
 import torch
 import numpy as np
 import time
+from collections import deque, Counter
 from torchvision.transforms import functional as F
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
@@ -13,11 +14,15 @@ from server.sort.sort import Sort
 from server.database import get_registered_plates, insert_plate_event, update_plate_event
 
 # ---------------------- Config ----------------------
-CAM_W, CAM_H = 320, 320
+CAM_W, CAM_H = 256,256
 YOLO_CONF = 0.20
-PLATE_SCORE_THR = 0.99
+PLATE_SCORE_THR = 0.9
 FRAME_SKIP_INTERVAL = 3
 VEHICLE_CLASSES = [2, 3]  # 2: car, 3: motorbike
+
+# Majority vote
+HISTORY_LEN = 5       # kích thước cửa sổ bỏ phiếu
+MIN_VOTES = 3         # số phiếu tối thiểu để chấp nhận một biển số
 # -----------------------------------------------------
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -52,8 +57,7 @@ def _init_models():
 
 class PlateDetector:
     """
-    Dùng class này để xử lý từng frame nhận từ client qua WebSocket.
-    Giữ nguyên pipeline: YOLO -> SORT -> Faster R-CNN -> VietOCR -> DB.
+    Pipeline: YOLO -> SORT -> Faster R-CNN -> OCR -> Majority Vote -> DB.
     """
     _shared_models = None  # cache models giữa nhiều instance
 
@@ -69,13 +73,20 @@ class PlateDetector:
         # state theo stream
         self.prev_frame_time = time.time()
         self.frame_count = 0
+
+        # Lịch sử bỏ phiếu theo từng xe: car_id -> deque([...])
+        self.car_plate_history = {}  # {car_id: deque([text1, text2, ...], maxlen=HISTORY_LEN)}
+
+        # Biển số đã ghi vào DB theo từng xe: car_id -> (text, conf_gần_nhất)
+        self.logged_cars = {}
+
+        # Lưu "best" OCR theo conf nếu cần hiển thị tạm
         self.car_plate_best = {}  # car_id -> (best_text, best_conf)
-        self.logged_cars = {}     # car_id -> (last_text, last_conf)
 
     def process(self, frame: np.ndarray):
         """
         Nhận 1 BGR frame, trả về (frame_đã_vẽ, metadata).
-        metadata: {"plates": [{"car_id": int, "plate": str, "confidence": float}, ...]}
+        metadata: {"plates": [{"car_id": int, "plate": str, "confidence": float, "votes": int}, ...]}
         """
         if frame is None or frame.size == 0:
             return frame, {"plates": []}
@@ -83,11 +94,10 @@ class PlateDetector:
         self.frame_count += 1
         metadata = {"plates": []}
 
-        # (tuỳ bạn có muốn resize/truncate để đảm bảo kích thước…)
-        # cv2.resize nếu cần
+        # Chuẩn hóa kích thước frame nếu cần
         frame = cv2.resize(frame, (CAM_W, CAM_H))
 
-        # Skip frame để tăng FPS (giữ nhịp cho tracker/fps overlay)
+        # Skip frame để tăng FPS
         if FRAME_SKIP_INTERVAL > 1 and (self.frame_count % FRAME_SKIP_INTERVAL != 0):
             self._put_fps(frame)
             return frame, metadata
@@ -111,7 +121,10 @@ class PlateDetector:
         except IndexError:
             track_ids = np.empty((0, 5))
 
-        # detect plate với Faster R-CNN trên mỗi vehicle
+        # Detect plate với Faster R-CNN trên mỗi vehicle
+                # ---------------- BATCH FASTER-RCNN ----------------
+        crops = []
+        car_map = []  # map index -> (car_id, bbox gốc)
         for vx1, vy1, vx2, vy2, car_id in track_ids.astype(int):
             vx1, vy1 = max(vx1, 0), max(vy1, 0)
             vx2, vy2 = min(vx2, frame.shape[1]), min(vy2, frame.shape[0])
@@ -122,44 +135,73 @@ class PlateDetector:
             if vehicle_crop.size == 0:
                 continue
 
+            crops.append(_tensor_from_bgr(vehicle_crop))
+            car_map.append((car_id, vx1, vy1, vx2, vy2))
+
+        if crops:
             with torch.no_grad():
-                outputs = self.model_frcnn([_tensor_from_bgr(vehicle_crop)])
-            scores = outputs[0]["scores"].cpu().numpy()
-            labels = outputs[0]["labels"].cpu().numpy()
-            boxes = outputs[0]["boxes"].cpu().numpy()
+                outputs = self.model_frcnn(crops)
 
-            for i, s in enumerate(scores):
-                # label 1 là "plate" như logic cũ
-                if s < PLATE_SCORE_THR or labels[i] != 1:
-                    continue
+            # duyệt từng crop + output tương ứng
+            for idx, out in enumerate(outputs):
+                car_id, vx1, vy1, vx2, vy2 = car_map[idx]
+                scores = out["scores"].cpu().numpy()
+                labels = out["labels"].cpu().numpy()
+                boxes = out["boxes"].cpu().numpy()
 
-                px1, py1, px2, py2 = boxes[i].astype(int)
-                gx1, gy1 = vx1 + px1, vy1 + py1
-                gx2, gy2 = vx1 + px2, vy1 + py2
+                for i, s in enumerate(scores):
+                    if s < PLATE_SCORE_THR or labels[i] != 1:
+                        continue
 
-                plate_text, plate_conf = readLicensePlate(frame.copy(), gx1, gy1, gx2, gy2)
-                if car_id not in self.car_plate_best or self.car_plate_best[car_id][1] < plate_conf:
-                    self.car_plate_best[car_id] = (plate_text, plate_conf)
+                    px1, py1, px2, py2 = boxes[i].astype(int)
+                    gx1, gy1 = vx1 + px1, vy1 + py1
+                    gx2, gy2 = vx1 + px2, vy1 + py2
 
-                draw_text = plate_text or self.car_plate_best.get(car_id, ("", 0))[0]
-                visualize(frame, s, draw_text, gx1, gy1, gx2, gy2)  # giữ giao diện vẽ cũ
+                    # OCR
+                    plate_text, plate_conf = readLicensePlate(frame.copy(), gx1, gy1, gx2, gy2)
 
-                metadata["plates"].append({
-                    "car_id": int(car_id),
-                    "plate": draw_text,
-                    "confidence": float(plate_conf)
-                })
+                    # Lưu best OCR theo conf
+                    if plate_text:
+                        if car_id not in self.car_plate_best or self.car_plate_best[car_id][1] < plate_conf:
+                            self.car_plate_best[car_id] = (plate_text, plate_conf)
 
-                # Ghi lịch sử vào DB (logic cũ)
-                if draw_text:
-                    if car_id not in self.logged_cars:
-                        insert_plate_event(car_id, draw_text, self.event_label)
-                        self.logged_cars[car_id] = (draw_text, plate_conf)
-                    else:
-                        prev_text, prev_conf = self.logged_cars[car_id]
-                        if plate_conf > prev_conf and draw_text != prev_text:
-                            update_plate_event(car_id, draw_text)
-                            self.logged_cars[car_id] = (draw_text, plate_conf)
+                    # Cập nhật history
+                    if plate_text:
+                        if car_id not in self.car_plate_history:
+                            self.car_plate_history[car_id] = deque(maxlen=HISTORY_LEN)
+                        self.car_plate_history[car_id].append(plate_text)
+
+                    # Bỏ phiếu
+                    best_text, best_count = "", 0
+                    if car_id in self.car_plate_history and len(self.car_plate_history[car_id]) > 0:
+                        votes = Counter(self.car_plate_history[car_id])
+                        best_text, best_count = votes.most_common(1)[0]
+
+                    draw_text = best_text if best_text else self.car_plate_best.get(car_id, ("", 0))[0]
+                    visualize(frame, s, draw_text, gx1, gy1, gx2, gy2)
+
+                    # Metadata
+                    metadata["plates"].append({
+                        "car_id": int(car_id),
+                        "plate": draw_text,
+                        "confidence": float(plate_conf),
+                        "votes": int(best_count)
+                    })
+
+                    # DB update
+                    if best_text and best_count >= MIN_VOTES:
+                        if car_id not in self.logged_cars:
+                            insert_plate_event(car_id, best_text, self.event_label)
+                            self.logged_cars[car_id] = (best_text, plate_conf)
+                        else:
+                            prev_text, prev_conf = self.logged_cars[car_id]
+                            if best_text != prev_text:
+                                update_plate_event(car_id, best_text)
+                                self.logged_cars[car_id] = (best_text, plate_conf)
+                            else:
+                                if plate_conf > prev_conf:
+                                    self.logged_cars[car_id] = (best_text, plate_conf)
+
 
         # FPS overlay
         self._put_fps(frame)

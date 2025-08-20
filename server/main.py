@@ -7,7 +7,15 @@ from server.database import init_db, get_all_history
 from server.utils.fasterRcnnCamera import PlateDetector  # <-- thêm import
 
 app = FastAPI(title="SmartParking Server", version="1.0.0")
-# ... middleware + init_db giữ nguyên ...
+init_db()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
 @app.websocket("/ws/camera/{cam_id}")
 async def camera_ws(ws: WebSocket, cam_id: int):
