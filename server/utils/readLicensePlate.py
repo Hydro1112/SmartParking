@@ -15,7 +15,7 @@ def get_ocr():
     global _predictor
     if _predictor is None:
         config = Cfg.load_config_from_name('vgg_transformer')
-        config['weights'] = 'D:/GitHub/Dataset/weights/transformerocr.pth'  # đường dẫn model đã train
+        config['weights'] = 'server/models/transformerocr.pth'  # đường dẫn model đã train
         config['device'] = 'cuda'  # hoặc 'cpu' nếu không có GPU
         _predictor = Predictor(config)
     return _predictor
