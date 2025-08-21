@@ -22,31 +22,24 @@ async def camera_ws(ws: WebSocket, cam_id: int):
     await ws.accept()
     print(f"[SERVER] ✅ Client connected on cam {cam_id}")
 
-    # gán nhãn sự kiện theo cam_id (tùy bạn map thế nào)
     event_label = "in" if cam_id == 0 else "out"
     detector = PlateDetector(event_label=event_label)
 
     while True:
         try:
-            # Nhận frame từ client (hex JPG)
-            msg = await ws.receive_text()
-            frame_bytes = bytes.fromhex(msg)
+            # Nhận frame từ client (raw bytes)
+            frame_bytes = await ws.receive_bytes()
             arr = np.frombuffer(frame_bytes, dtype=np.uint8)
             frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-            # Detect + vẽ
-            processed, meta = detector.process(frame)
+            # Detect (frame để bỏ, chỉ lấy meta)
+            _, meta = detector.process(frame)
 
-            ok, buf = cv2.imencode(".jpg", processed)
-            if not ok:
-                # Nếu có lỗi encode, gửi lại frame gốc
-                ok, buf = cv2.imencode(".jpg", frame)
-
-            await ws.send_json({
-                "frame": buf.tobytes().hex(),
-                "meta": meta
-            })
+            # Gửi metadata JSON cho client
+            await ws.send_json(meta)
 
         except Exception as e:
-            # log nếu cần
+            print(f"[SERVER] ⚠️ Error cam {cam_id}: {e}")
             break
+
+

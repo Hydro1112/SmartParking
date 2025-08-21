@@ -8,7 +8,7 @@ from frontend.home import ParkingDashboard
 
 SERVER_URL = "ws://localhost:8000/ws/camera"
 FRONTEND_ONLY = False  # 👈 bật cái này để không cần backend
-
+RECONNECT_DELAY = 5    # số giây chờ khi mất kết nối
 
 class App(ParkingDashboard):
     def __init__(self):
@@ -30,19 +30,15 @@ class App(ParkingDashboard):
 
     async def run_camera(self, cam_id: int, which: str):
         cap = cv2.VideoCapture(cam_id)
-
         if not cap.isOpened():
             print(f"[CLIENT] ❌ Cannot open webcam {cam_id}")
             return
-
         print(f"[CLIENT] ✅ Opened webcam {cam_id}")
 
         if FRONTEND_ONLY:
-            # 👉 Không connect WS, chỉ đọc webcam
             while True:
                 ret, frame = cap.read()
                 if not ret:
-                    print(f"[CLIENT] ❌ Failed to capture frame from webcam {cam_id}")
                     await asyncio.sleep(0.03)
                     continue
 
@@ -51,33 +47,74 @@ class App(ParkingDashboard):
                 else:
                     self.frame_out = frame
 
-                await asyncio.sleep(0.03)  # tránh full CPU
+                await asyncio.sleep(0.03)
         else:
-            # 👉 Chế độ có backend, vừa gửi vừa nhận frame
             url = f"{SERVER_URL}/{cam_id}"
-            async with websockets.connect(url) as ws:
-                print(f"[CLIENT] 🔗 Connected to server for cam {cam_id}")
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        continue
+            while True:
+                try:
+                    async with websockets.connect(url) as ws:
+                        print(f"[CLIENT] 🔗 Connected to server for cam {cam_id}")
+                        while True:
+                            ret, frame = cap.read()
+                            if not ret:
+                                continue
 
-                    ok, buf = cv2.imencode(".jpg", frame)
-                    if not ok:
-                        continue
+                            # gửi raw JPG byte
+                            ok, buf = cv2.imencode(".jpg", frame)
+                            if not ok:
+                                continue
+                            await ws.send(buf.tobytes())
 
-                    await ws.send(buf.tobytes().hex())
-                    msg = await ws.recv()
-                    data = json.loads(msg)
+                            # nhận JSON metadata
+                            msg = await ws.recv()
+                            try:
+                                data = json.loads(msg)
+                            except json.JSONDecodeError:
+                                print(f"[CLIENT] ⚠️ Non-JSON message: {msg}")
+                                continue
 
-                    frame_bytes = bytes.fromhex(data["frame"])
-                    arr = np.frombuffer(frame_bytes, dtype=np.uint8)
-                    processed = cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-                    if which == "in":
-                        self.frame_in = processed
-                    else:
-                        self.frame_out = processed
+                            # vẽ bbox tại client
+                            processed = self._draw_metadata(frame.copy(), data)
+
+                            if which == "in":
+                                self.frame_in = processed
+                            else:
+                                self.frame_out = processed
+
+                except Exception as e:
+                    print(f"[CLIENT] ⚠️ Camera {cam_id} disconnected: {e}")
+                    await asyncio.sleep(RECONNECT_DELAY)
+
+
+    def _draw_metadata(self, frame, data):
+        if not isinstance(data, dict):
+            return frame
+
+        plates = data.get("plates", [])
+        scale = data.get("scale", None)
+
+        sx, sy = 1.0, 1.0
+        if scale:
+            sx = scale.get("orig_w", 1) / scale.get("input_w", 1)
+            sy = scale.get("orig_h", 1) / scale.get("input_h", 1)
+
+        for item in plates:
+            x1, y1, x2, y2 = map(int, item["bbox"])
+            x1, y1, x2, y2 = int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy)
+
+            plate = item.get("plate", "")
+            conf = item.get("confidence", 0.0)
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, f"{plate} {conf:.2f}", (x1, max(0, y1 - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        return frame
+
+
+
+
 
     def update_frames(self):
         if self.frame_in is not None:
