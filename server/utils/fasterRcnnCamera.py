@@ -84,71 +84,61 @@ class PlateDetector:
 
     def process(self, frame: np.ndarray):
         """
-        Nhận 1 BGR frame gốc (orig), trả về (frame_orig, metadata).
-        metadata:
+        Nhận 1 BGR frame gốc, trả về metadata JSON-serializable:
         {
             "plates": [
                 {"car_id": int, "plate": str, "confidence": float, "votes": int, "bbox": [x1,y1,x2,y2]}
             ],
             "scale": {"orig_w": int, "orig_h": int, "input_w": int, "input_h": int}
         }
-
-        - Detect/tracking/plate-detector chạy trên ảnh resize (input_w,input_h).
-        - BBOX trong metadata đã được map về toạ độ ảnh gốc (orig_w, orig_h).
-        - OCR cắt ảnh từ frame gốc để chất lượng tốt hơn.
         """
         if frame is None or frame.size == 0:
-            return frame, {"plates": [], "scale": None}
+            return {"plates": [], "scale": None}
 
         self.frame_count += 1
         metadata = {"plates": []}
 
         # Kích thước gốc
         orig_h, orig_w = frame.shape[:2]
-
-        # Ảnh đưa vào model
         input_w, input_h = CAM_W, CAM_H
-        infer_img = cv2.resize(frame, (input_w, input_h))  # ảnh cho YOLO/SORT/FRCNN
+        infer_img = cv2.resize(frame, (input_w, input_h))
 
-        # Hệ số scale từ infer -> original
         sx = float(orig_w) / float(input_w)
         sy = float(orig_h) / float(input_h)
 
-        # Skip frame để tăng FPS (nếu cần)
+        # Skip frame
         if FRAME_SKIP_INTERVAL > 1 and (self.frame_count % FRAME_SKIP_INTERVAL != 0):
-            return frame, {
+            return {
                 "plates": [],
                 "scale": {
-                    "orig_w": orig_w, "orig_h": orig_h,
-                    "input_w": input_w, "input_h": input_h
+                    "orig_w": int(orig_w), "orig_h": int(orig_h),
+                    "input_w": int(input_w), "input_h": int(input_h)
                 }
             }
 
-        # ---------------- YOLO detect vehicles (trên infer_img) ----------------
+        # YOLO detect
         try:
             yolo_pred = self.model_yolo(infer_img, verbose=False, half=self.YOLO_HALF)[0]
         except Exception:
             yolo_pred = self.model_yolo(infer_img, verbose=False)[0]
 
         dets = []
-        # boxes.data: [x1,y1,x2,y2,score,cls] (tọa độ theo infer_img)
         for x1, y1, x2, y2, score, cls in yolo_pred.boxes.data.tolist():
             if int(cls) in VEHICLE_CLASSES and score >= YOLO_CONF:
                 dets.append([x1, y1, x2, y2, score])
         dets_np = np.array(dets, dtype=float) if dets else np.empty((0, 5))
 
-        # ---------------- SORT tracking (tọa độ theo infer_img) ----------------
+        # SORT tracking
         try:
-            track_ids = self.tracker.update(dets_np)  # [x1,y1,x2,y2,id] theo infer_img
+            track_ids = self.tracker.update(dets_np)
         except IndexError:
             track_ids = np.empty((0, 5))
 
-        # ---------------- Faster-RCNN biển số trên từng vehicle (theo infer_img) ----------------
-        crops = []
-        car_map = []  # index -> (car_id, vx1, vy1, vx2, vy2) theo infer_img
+        # Faster-RCNN + OCR
+        crops, car_map = [], []
         for vx1, vy1, vx2, vy2, car_id in track_ids.astype(int):
-            vx1, vy1 = max(vx1, 0), max(vy1, 0)
-            vx2, vy2 = min(vx2, input_w), min(vy2, input_h)
+            vx1, vy1 = max(int(vx1), 0), max(int(vy1), 0)
+            vx2, vy2 = min(int(vx2), input_w), min(int(vy2), input_h)
             if vx2 <= vx1 or vy2 <= vy1:
                 continue
 
@@ -157,7 +147,7 @@ class PlateDetector:
                 continue
 
             crops.append(_tensor_from_bgr(vehicle_crop))
-            car_map.append((car_id, vx1, vy1, vx2, vy2))
+            car_map.append((int(car_id), vx1, vy1, vx2, vy2))
 
         if crops:
             with torch.no_grad():
@@ -173,33 +163,24 @@ class PlateDetector:
                     if s < PLATE_SCORE_THR or labels[i] != 1:
                         continue
 
-                    # Bbox plate trong toạ độ crop (infer_img)
                     px1, py1, px2, py2 = boxes[i].astype(int)
-                    # Quy về toạ độ global (infer_img)
                     gx1, gy1 = vx1 + px1, vy1 + py1
                     gx2, gy2 = vx1 + px2, vy1 + py2
 
-                    # Map từ infer_img -> ảnh gốc
-                    ox1 = int(gx1 * sx)
-                    oy1 = int(gy1 * sy)
-                    ox2 = int(gx2 * sx)
-                    oy2 = int(gy2 * sy)
+                    # Map về ảnh gốc
+                    ox1, oy1 = int(gx1 * sx), int(gy1 * sy)
+                    ox2, oy2 = int(gx2 * sx), int(gy2 * sy)
 
-                    # OCR cắt từ ảnh gốc (nét hơn)
+                    # OCR
                     plate_text, plate_conf = readLicensePlate(frame, ox1, oy1, ox2, oy2)
 
-                    # Lưu best OCR theo conf
                     if plate_text:
                         if car_id not in self.car_plate_best or self.car_plate_best[car_id][1] < plate_conf:
                             self.car_plate_best[car_id] = (plate_text, plate_conf)
-
-                    # Cập nhật history
-                    if plate_text:
                         if car_id not in self.car_plate_history:
                             self.car_plate_history[car_id] = deque(maxlen=HISTORY_LEN)
                         self.car_plate_history[car_id].append(plate_text)
 
-                    # Bỏ phiếu
                     best_text, best_count = "", 0
                     if car_id in self.car_plate_history and len(self.car_plate_history[car_id]) > 0:
                         votes = Counter(self.car_plate_history[car_id])
@@ -207,35 +188,34 @@ class PlateDetector:
 
                     draw_text = best_text if best_text else self.car_plate_best.get(car_id, ("", 0))[0]
 
-                    # Metadata: bbox theo ẢNH GỐC
+                    # 🔑 Metadata JSON-safe
                     metadata["plates"].append({
                         "car_id": int(car_id),
-                        "plate": draw_text,
+                        "plate": str(draw_text),
                         "confidence": float(plate_conf),
                         "votes": int(best_count),
                         "bbox": [int(gx1), int(gy1), int(gx2), int(gy2)]
                     })
 
-                    # DB update (có thể cân nhắc đẩy sang background để mượt hơn)
+                    # DB update
                     if best_text and best_count >= MIN_VOTES:
                         if car_id not in self.logged_cars:
                             insert_plate_event(car_id, best_text, self.event_label)
-                            self.logged_cars[car_id] = (best_text, plate_conf)
+                            self.logged_cars[car_id] = (best_text, float(plate_conf))
                         else:
                             prev_text, prev_conf = self.logged_cars[car_id]
                             if best_text != prev_text:
                                 update_plate_event(car_id, best_text)
-                                self.logged_cars[car_id] = (best_text, plate_conf)
-                            else:
-                                if plate_conf > prev_conf:
-                                    self.logged_cars[car_id] = (best_text, plate_conf)
+                            if plate_conf > prev_conf:
+                                self.logged_cars[car_id] = (best_text, float(plate_conf))
 
-        # Gửi kèm thông tin scale để client có thể tự xử lý nếu cần
         metadata["scale"] = {
-            "orig_w": orig_w, "orig_h": orig_h,
-            "input_w": input_w, "input_h": input_h
+            "orig_w": int(orig_w),
+            "orig_h": int(orig_h),
+            "input_w": int(input_w),
+            "input_h": int(input_h)
         }
 
-        # Trả lại frame gốc (không vẽ) + metadata
         return metadata
+
 

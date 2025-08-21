@@ -92,17 +92,9 @@ class App(ParkingDashboard):
             return frame
 
         plates = data.get("plates", [])
-        scale = data.get("scale", None)
-
-        sx, sy = 1.0, 1.0
-        if scale:
-            sx = scale.get("orig_w", 1) / scale.get("input_w", 1)
-            sy = scale.get("orig_h", 1) / scale.get("input_h", 1)
 
         for item in plates:
-            x1, y1, x2, y2 = map(int, item["bbox"])
-            x1, y1, x2, y2 = int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy)
-
+            x1, y1, x2, y2 = map(int, item["bbox"])  # <-- giữ nguyên, KHÔNG nhân thêm scale
             plate = item.get("plate", "")
             conf = item.get("confidence", 0.0)
 
@@ -111,6 +103,7 @@ class App(ParkingDashboard):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         return frame
+
 
 
 

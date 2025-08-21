@@ -33,7 +33,7 @@ async def camera_ws(ws: WebSocket, cam_id: int):
             frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
             # Detect (frame để bỏ, chỉ lấy meta)
-            _, meta = detector.process(frame)
+            meta = detector.process(frame)
 
             # Gửi metadata JSON cho client
             await ws.send_json(meta)
