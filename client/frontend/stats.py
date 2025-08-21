@@ -15,6 +15,7 @@ import sys, math, os, random, sqlite3, datetime as dt
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 
+from fastapi import params
 import numpy as np
 import pandas as pd
 from matplotlib.animation import FuncAnimation
@@ -42,9 +43,14 @@ PARKING_CAPACITY = 200  # sức chứa bãi (config)
 
 # ----------------- Helpers -----------------------
 
-def df_query(sql: str, params=()):
+def df_query(sql, params=None):
     con = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(sql, con, params=params, parse_dates=["entry_time","exit_time"])
+    df = pd.read_sql_query(
+        sql,
+        con,
+        params=params,
+        parse_dates=["checkin_time", "checkout_time"]
+    )
     con.close()
     return df
 
@@ -80,10 +86,11 @@ def price_rule(minutes: int, ticket_type: str, vehicle_type: str) -> float:
 def simulate_days(n_days=35, seed=7):
     random.seed(seed)
     cmds = []
+    cmds_pay = []  # <-- thêm list lệnh cho payments
     start = dt.datetime.now().date() - dt.timedelta(days=n_days)
     for i in range(n_days):
         day = start + dt.timedelta(days=i)
-        # weekday traffic profile
+        
         base_flow = 120 if day.weekday() < 5 else 80
         noise = random.randint(-20, 20)
         entries = max(30, base_flow + noise)
@@ -91,30 +98,41 @@ def simulate_days(n_days=35, seed=7):
             vt = "motor" if random.random() < 0.7 else "car"
             tt = np.random.choice(["hourly","overnight","monthly"], p=[0.7,0.1,0.2])
             et = dt.datetime.combine(day, dt.time(hour=random.randint(6, 21), minute=random.randint(0,59)))
-            # monthly: many will not exit the same day (keep active)
+            
             if tt == "monthly" and random.random() < 0.6:
-                exit_time = None
+                checkout_time = None
                 minutes = 0
                 amt = 0.0
                 status = "active"
             else:
-                stay_min = random.randint(20, 6*60)  # 20 min – 6h
+                stay_min = random.randint(20, 6*60)
                 xt = et + dt.timedelta(minutes=stay_min)
-                # some roll over to next day
-                if random.random() < 0.15: 
+                if random.random() < 0.15:
                     xt += dt.timedelta(hours=random.randint(2, 18))
-                exit_time = xt
+                checkout_time = xt
                 minutes = int((xt - et).total_seconds() / 60)
                 amt = price_rule(minutes, tt, vt)
                 status = "closed"
+
+            ticket_id = f"T{day.strftime('%y%m%d')}-{i:02d}-{j:03d}"
             cmds.append((
-                "INSERT OR REPLACE INTO tickets(id,plate,vehicle_type,ticket_type,entry_time,exit_time,amount,status) VALUES (?,?,?,?,?,?,?,?)",
-                (f"T{day.strftime('%y%m%d')}-{i:02d}-{j:03d}", random_plate(), vt, tt,
-                 et.isoformat(sep=' '), 
-                 None if exit_time is None else exit_time.isoformat(sep=' '),
-                 amt, status)
+                "INSERT OR REPLACE INTO tickets(id,plate,vehicle_type,ticket_type,checkin_time,checkout_time,duration,parking_spot,status) VALUES (?,?,?,?,?,?,?,?,?)",
+                (ticket_id, random_plate(), vt, tt,
+                 et.isoformat(sep=' '),
+                 None if checkout_time is None else checkout_time.isoformat(sep=' '),
+                 minutes, "A1", status)
             ))
+
+            # nếu vé đã đóng -> thêm payment
+            if status == "closed":
+                cmds_pay.append((
+                    "INSERT INTO payments(ticket_id, amount) VALUES (?, ?)",
+                    (ticket_id, float(amt))
+                ))
+
     bulk_execute(cmds)
+    if cmds_pay:
+        bulk_execute(cmds_pay)
 
 # ----------------- UI building blocks -----------------------
 class Card(QFrame):
@@ -283,34 +301,42 @@ class StatsPage(QWidget):
         d0, d1 = self._date_range()
         # pull tickets intersecting range
         sql = """
-        SELECT * FROM tickets
-        WHERE DATE(entry_time) <= ? AND (exit_time IS NULL OR DATE(exit_time) >= ?)
+       SELECT t.*, p.amount 
+        FROM tickets t
+        LEFT JOIN payments p ON t.id = p.ticket_id
+        WHERE DATE(t.checkin_time) <= ? AND (t.checkout_time IS NULL OR DATE(t.checkout_time) >= ?)
         """
         df = df_query(sql, (d1.isoformat(), d0.isoformat()))
         return df, d0, d1
 
+    
     def _update_kpis(self, df: pd.DataFrame, d0, d1):
-        # Occupancy approximation: active tickets on last day vs capacity
+       
         today = d1
-        active = df[(df["status"]=="active") | (df["exit_time"].isna())]
-        # active at end of range ≈ entries before end and (no exit or exit after end)
-        active_at_end = df[(pd.to_datetime(df["entry_time"]).dt.date <= today) &
-                           (df["exit_time"].isna() | (pd.to_datetime(df["exit_time"]).dt.date > today))]
+        active_at_end = df[
+                (pd.to_datetime(df["checkin_time"]).dt.date <= today) &
+                (df["checkout_time"].isna() | (pd.to_datetime(df["checkout_time"]).dt.date > today))
+            ]
         fill_rate = (len(active_at_end) / PARKING_CAPACITY) if PARKING_CAPACITY else 0
         self.kpi_fill.set(f"{fill_rate*100:.0f}%", f"Sức chứa: {PARKING_CAPACITY}")
-
-        # Revenue in range: sum amounts where exit_time within [d0,d1]
-        ex = df.dropna(subset=["exit_time"]).copy()
-        ex["exit_d"] = pd.to_datetime(ex["exit_time"]).dt.date
-        rev = ex[(ex["exit_d"]>=d0) & (ex["exit_d"]<=d1)]["amount"].sum()
+        
+        ex = df.dropna(subset=["checkout_time"]).copy()
+        if not ex.empty:
+            ex["checkout_d"] = pd.to_datetime(ex["checkout_time"]).dt.date  # <-- TẠO CỘT NÀY
+            # Lưu ý: amount có thể NaN vì LEFT JOIN -> fillna(0)
+            rev = ex[(ex["checkout_d"] >= d0) & (ex["checkout_d"] <= d1)]["amount"].fillna(0).sum()
+        else:
+            rev = 0.0
         self.kpi_rev.set(f"{int(rev):,} VND".replace(",", "."), f"{d0.strftime('%d/%m')}–{d1.strftime('%d/%m')}")
 
-        # Active tickets count
+        # Đếm vé đang hoạt động
         self.kpi_active.set(str(len(active_at_end)), "Vé đang lưu xe")
 
-        # Avg dwell time (closed tickets in range)
+        # Thời gian gửi TB (phút) cho vé đã đóng
         if not ex.empty:
-            ex["minutes"] = (pd.to_datetime(ex["exit_time"]) - pd.to_datetime(ex["entry_time"])).dt.total_seconds()/60
+            ex["minutes"] = (
+                pd.to_datetime(ex["checkout_time"]) - pd.to_datetime(ex["checkin_time"])
+            ).dt.total_seconds() / 60
             mins = ex["minutes"].mean()
             self.kpi_dwell.set(f"{mins:.0f} phút", "Trung bình vé đã đóng")
         else:
@@ -320,10 +346,10 @@ class StatsPage(QWidget):
         ax = self.line_fig.ax; ax.clear()
         days = pd.date_range(d0, d1, freq="D")
         # entries by day
-        e = pd.to_datetime(df["entry_time"]).dt.date.value_counts().sort_index()
+        e = pd.to_datetime(df["checkin_time"]).dt.date.value_counts().sort_index()
         x_in = [e.get(d.date(), 0) for d in days]
         # exits by day
-        exits = pd.to_datetime(df["exit_time"]).dropna().dt.date.value_counts().sort_index()
+        exits = pd.to_datetime(df["checkout_time"]).dropna().dt.date.value_counts().sort_index()
         x_out = [exits.get(d.date(), 0) for d in days]
 
         # Animation setup
@@ -372,11 +398,11 @@ class StatsPage(QWidget):
 
     def _plot_revenue(self, df: pd.DataFrame, d0, d1):
         ax = self.rev_fig.ax; ax.clear()
-        closed = df.dropna(subset=["exit_time"]).copy()
+        closed = df.dropna(subset=["checkout_time"]).copy()
         if closed.empty:
             ax.set_title("Chưa có doanh thu", color="white"); self.rev_fig.draw(); return
-        closed["exit_d"] = pd.to_datetime(closed["exit_time"]).dt.date
-        g = closed.groupby("exit_d")["amount"].sum()
+        closed["checkout_d"] = pd.to_datetime(closed["checkout_time"]).dt.date
+        g = closed.groupby("checkout_d")["amount"].sum()
         xs = pd.date_range(d0, d1, freq="D")
         ys = [g.get(d.date(), 0) for d in xs]
 
@@ -408,7 +434,7 @@ class StatsPage(QWidget):
         if df.empty:
             ax.set_title("Chưa có dữ liệu", color="white"); self.heat_fig.draw(); return
         dfe = df.copy()
-        dfe["d"] = pd.to_datetime(dfe["entry_time"])
+        dfe["d"] = pd.to_datetime(dfe["checkin_time"])
         dfe["day"] = dfe["d"].dt.date
         dfe["hour"] = dfe["d"].dt.hour
         xs = pd.date_range(d0, d1, freq="D")
@@ -443,12 +469,13 @@ class StatsPage(QWidget):
 
     def _ticket_status(self, df: pd.DataFrame, d0, d1):
         total = len(df)
-        active = ((df["status"]=="active") | df["exit_time"].isna()).sum()
-        closed = ((df["status"]=="closed") & df["exit_time"].notna()).sum()
+        active = ((df["status"]=="active") | df["checkout_time"].isna()).sum()
+        closed = ((df["status"]=="closed") & df["checkout_time"].notna()).sum()
         cancelled = (df["status"]=="cancelled").sum()
         monthly = (df["ticket_type"]=="monthly").sum()
         hourly  = (df["ticket_type"]=="hourly").sum()
         overnight = (df["ticket_type"]=="overnight").sum()
+
         html = f"""
         <div style='color:white'>
             Tổng vé trong khoảng: <b>{total}</b><br>
