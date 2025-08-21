@@ -7,7 +7,7 @@ from PySide6.QtGui import QImage, QPixmap
 from frontend.home import ParkingDashboard
 
 SERVER_URL = "ws://localhost:8000/ws/camera"
-FRONTEND_ONLY = True  # 👈 bật cái này để không cần backend
+FRONTEND_ONLY = False  # 👈 bật cái này để không cần backend
 
 
 class App(ParkingDashboard):
