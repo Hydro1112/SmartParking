@@ -1,23 +1,22 @@
 import cv2
 import torch
 import numpy as np
-import time
 from collections import deque, Counter
 from torchvision.transforms import functional as F
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from ultralytics import YOLO
-
+import base64
 from server.utils.readLicensePlate import readLicensePlate
-from server.utils.utils import visualize
 from server.sort.sort import Sort
-from server.database import get_registered_plates, insert_plate_event, update_plate_event
+
+# Thay đổi import: Bỏ các hàm DB cũ, import lớp Model 'Vehicle'
+from server.database.database_manager import DatabaseManager, Vehicle
 
 # ---------------------- Config ----------------------
-CAM_W, CAM_H = 256,256
+CAM_W, CAM_H = 480, 480
 YOLO_CONF = 0.20
 PLATE_SCORE_THR = 0.9
-FRAME_SKIP_INTERVAL = 3
 VEHICLE_CLASSES = [2, 3]  # 2: car, 3: motorbike
 
 # Majority vote
@@ -57,159 +56,138 @@ def _init_models():
 
 class PlateDetector:
     """
-    Pipeline: YOLO -> SORT -> Faster R-CNN -> OCR -> Majority Vote -> DB.
+    Pipeline: (ảnh resize) YOLO -> SORT -> Faster R-CNN -> OCR -> Majority Vote.
+    Ảnh gốc chỉ để gửi về client.
     """
     _shared_models = None  # cache models giữa nhiều instance
 
-    def __init__(self, event_label: str = "in"):
+    # Thay đổi __init__: Thêm db_manager làm tham số
+    def __init__(self, db_manager: DatabaseManager, event_label=None):
         if PlateDetector._shared_models is None:
             PlateDetector._shared_models = _init_models()
         self.model_frcnn, self.model_yolo, self.YOLO_HALF = PlateDetector._shared_models
 
         self.tracker = Sort()
-        self.event_label = event_label
-        self.registered_plates = get_registered_plates()
-
-        # state theo stream
-        self.prev_frame_time = time.time()
-        self.frame_count = 0
+        self.db_manager = db_manager  # Lưu lại instance của manager
 
         # Lịch sử bỏ phiếu theo từng xe: car_id -> deque([...])
-        self.car_plate_history = {}  # {car_id: deque([text1, text2, ...], maxlen=HISTORY_LEN)}
+        self.car_plate_history = {}  # {car_id: deque([...], maxlen=HISTORY_LEN)}
 
-        # Biển số đã ghi vào DB theo từng xe: car_id -> (text, conf_gần_nhất)
+        # Biển số đã log theo từng xe: car_id -> (text, conf)
         self.logged_cars = {}
 
-        # Lưu "best" OCR theo conf nếu cần hiển thị tạm
-        self.car_plate_best = {}  # car_id -> (best_text, best_conf)
+        # Thêm event_label (in/out)
+        self.event_label = event_label
 
     def process(self, frame: np.ndarray):
         """
-        Nhận 1 BGR frame, trả về (frame_đã_vẽ, metadata).
-        metadata: {"plates": [{"car_id": int, "plate": str, "confidence": float, "votes": int}, ...]}
+        Trả về metadata JSON:
+        {
+            "plates": [...],
+            "image_full": <base64 ảnh gốc>,
+            "event": "in"/"out"
+        }
         """
         if frame is None or frame.size == 0:
-            return frame, {"plates": []}
+            return {"plates": [], "image_full": None, "event": self.event_label}
 
-        self.frame_count += 1
         metadata = {"plates": []}
 
-        # Chuẩn hóa kích thước frame nếu cần
-        frame = cv2.resize(frame, (CAM_W, CAM_H))
+        # ---------------- Resize toàn bộ pipeline detect ----------------
+        detect_img = cv2.resize(frame, (CAM_W, CAM_H))
 
-        # Skip frame để tăng FPS
-        if FRAME_SKIP_INTERVAL > 1 and (self.frame_count % FRAME_SKIP_INTERVAL != 0):
-            self._put_fps(frame)
-            return frame, metadata
-
-        # YOLO detect vehicles
+        # ---------------- YOLO detect ----------------
         try:
-            yolo_pred = self.model_yolo(frame, verbose=False, half=self.YOLO_HALF)[0]
+            yolo_pred = self.model_yolo(detect_img, verbose=False, half=self.YOLO_HALF)[0]
         except Exception:
-            yolo_pred = self.model_yolo(frame, verbose=False)[0]
+            yolo_pred = self.model_yolo(detect_img, verbose=False)[0]
 
-        dets = []
-        # boxes.data: [x1,y1,x2,y2,score,cls]
+        dets, car_info = [], []
         for x1, y1, x2, y2, score, cls in yolo_pred.boxes.data.tolist():
             if int(cls) in VEHICLE_CLASSES and score >= YOLO_CONF:
                 dets.append([x1, y1, x2, y2, score])
+                car_type = "car" if int(cls) == 2 else "motorbike"
+                car_info.append((x1, y1, x2, y2, car_type))
         dets_np = np.array(dets, dtype=float) if dets else np.empty((0, 5))
 
-        # SORT tracking (trả về [x1,y1,x2,y2,id])
+        # ---------------- SORT tracking ----------------
         try:
             track_ids = self.tracker.update(dets_np)
         except IndexError:
             track_ids = np.empty((0, 5))
 
-        # Detect plate với Faster R-CNN trên mỗi vehicle
-                # ---------------- BATCH FASTER-RCNN ----------------
-        crops = []
-        car_map = []  # map index -> (car_id, bbox gốc)
-        for vx1, vy1, vx2, vy2, car_id in track_ids.astype(int):
-            vx1, vy1 = max(vx1, 0), max(vy1, 0)
-            vx2, vy2 = min(vx2, frame.shape[1]), min(vy2, frame.shape[0])
-            if vx2 <= vx1 or vy2 <= vy1:
-                continue
-
-            vehicle_crop = frame[vy1:vy2, vx1:vx2]
+        # ---------------- Faster-RCNN + OCR ----------------
+        for idx, (vx1, vy1, vx2, vy2, car_id) in enumerate(track_ids.astype(int)):
+            vx1, vy1, vx2, vy2 = map(int, [vx1, vy1, vx2, vy2])
+            vehicle_crop = detect_img[vy1:vy2, vx1:vx2]
             if vehicle_crop.size == 0:
                 continue
 
-            crops.append(_tensor_from_bgr(vehicle_crop))
-            car_map.append((car_id, vx1, vy1, vx2, vy2))
-
-        if crops:
             with torch.no_grad():
-                outputs = self.model_frcnn(crops)
+                outputs = self.model_frcnn([_tensor_from_bgr(vehicle_crop)])
 
-            # duyệt từng crop + output tương ứng
-            for idx, out in enumerate(outputs):
-                car_id, vx1, vy1, vx2, vy2 = car_map[idx]
-                scores = out["scores"].cpu().numpy()
-                labels = out["labels"].cpu().numpy()
-                boxes = out["boxes"].cpu().numpy()
+            out = outputs[0]
+            for i, s in enumerate(out["scores"].cpu().numpy()):
+                if s < PLATE_SCORE_THR or out["labels"][i].item() != 1:
+                    continue
 
-                for i, s in enumerate(scores):
-                    if s < PLATE_SCORE_THR or labels[i] != 1:
-                        continue
+                px1, py1, px2, py2 = out["boxes"][i].cpu().numpy().astype(int)
+                ox1, oy1 = vx1 + px1, vy1 + py1
+                ox2, oy2 = vx1 + px2, vy1 + py2
 
-                    px1, py1, px2, py2 = boxes[i].astype(int)
-                    gx1, gy1 = vx1 + px1, vy1 + py1
-                    gx2, gy2 = vx1 + px2, vy1 + py2
+                # OCR chạy trên ảnh resize
+                plate_text, plate_conf = readLicensePlate(detect_img, ox1, oy1, ox2, oy2)
+                if not plate_text:
+                    continue
 
-                    # OCR
-                    plate_text, plate_conf = readLicensePlate(frame.copy(), gx1, gy1, gx2, gy2)
+                # Bỏ phiếu
+                if car_id not in self.car_plate_history:
+                    self.car_plate_history[car_id] = deque(maxlen=HISTORY_LEN)
+                self.car_plate_history[car_id].append(plate_text)
+                votes = Counter(self.car_plate_history[car_id])
+                best_text, best_count = votes.most_common(1)[0]
 
-                    # Lưu best OCR theo conf
-                    if plate_text:
-                        if car_id not in self.car_plate_best or self.car_plate_best[car_id][1] < plate_conf:
-                            self.car_plate_best[car_id] = (plate_text, plate_conf)
+                # Chỉ add nếu đã vote đủ
+                if best_count >= MIN_VOTES:
+                    plate_text = best_text
+                    vehicle_type = car_info[idx][4] if idx < len(car_info) else "unknown"
 
-                    # Cập nhật history
-                    if plate_text:
-                        if car_id not in self.car_plate_history:
-                            self.car_plate_history[car_id] = deque(maxlen=HISTORY_LEN)
-                        self.car_plate_history[car_id].append(plate_text)
+                    # Thay thế logic DB cũ bằng DatabaseManager
+                    # =========================================================
+                    # 1. Kiểm tra xe đã có trong DB chưa bằng biển số
+                    existing_vehicle = self.db_manager.get_vehicle_by_plate(plate_text)
 
-                    # Bỏ phiếu
-                    best_text, best_count = "", 0
-                    if car_id in self.car_plate_history and len(self.car_plate_history[car_id]) > 0:
-                        votes = Counter(self.car_plate_history[car_id])
-                        best_text, best_count = votes.most_common(1)[0]
+                    # 2. Nếu xe chưa có, tạo bản ghi mới
+                    if existing_vehicle is None:
+                        # Convert ảnh crop sang base64
+                        _, buf = cv2.imencode(".jpg", vehicle_crop)
+                        img_b64 = base64.b64encode(buf).decode("utf-8")
+                        
+                        # Tạo đối tượng Vehicle
+                        new_vehicle = Vehicle(
+                            id=str(car_id),
+                            plate=plate_text,
+                            vehicle_type=vehicle_type,
+                            license_plate_image=img_b64
+                        )
+                        # Dùng manager để tạo
+                        self.db_manager.create_vehicle(new_vehicle)
+                        print(f"[AI] 🆕 Xe mới được phát hiện và lưu vào DB: {plate_text}")
+                    # =========================================================
 
-                    draw_text = best_text if best_text else self.car_plate_best.get(car_id, ("", 0))[0]
-                    visualize(frame, s, draw_text, gx1, gy1, gx2, gy2)
-
-                    # Metadata
                     metadata["plates"].append({
                         "car_id": int(car_id),
-                        "plate": draw_text,
-                        "confidence": float(plate_conf),
-                        "votes": int(best_count)
+                        "plate": plate_text,
+                        "vehicle_type": vehicle_type
                     })
 
-                    # DB update
-                    if best_text and best_count >= MIN_VOTES:
-                        if car_id not in self.logged_cars:
-                            insert_plate_event(car_id, best_text, self.event_label)
-                            self.logged_cars[car_id] = (best_text, plate_conf)
-                        else:
-                            prev_text, prev_conf = self.logged_cars[car_id]
-                            if best_text != prev_text:
-                                update_plate_event(car_id, best_text)
-                                self.logged_cars[car_id] = (best_text, plate_conf)
-                            else:
-                                if plate_conf > prev_conf:
-                                    self.logged_cars[car_id] = (best_text, plate_conf)
 
+        # ---------------- Gửi kèm ảnh gốc ----------------
+        _, buf = cv2.imencode(".jpg", frame)
+        metadata["image_full"] = base64.b64encode(buf).decode("utf-8")
 
-        # FPS overlay
-        self._put_fps(frame)
-        return frame, metadata
+        # ---------------- Thêm event (in/out) ----------------
+        metadata["event"] = self.event_label
+        
+        return metadata
 
-    def _put_fps(self, frame):
-        new_t = time.time()
-        fps = 1.0 / (new_t - self.prev_frame_time + 1e-5)
-        self.prev_frame_time = new_t
-        cv2.putText(frame, f"FPS: {fps:.1f}", (7, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (100, 255, 0), 2)

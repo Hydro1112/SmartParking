@@ -1,19 +1,15 @@
-# parking_dashboard_qt.py
-# from logging import root
 import sys
 from typing import Optional
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QFrame, QProgressBar, QTableWidget, QTableWidgetItem, QPushButton,
-    QFileDialog, QSizePolicy, QAbstractItemView
+    QFrame, QTableWidget, QTableWidgetItem, QSizePolicy, QAbstractItemView, QPushButton
 )
-from PySide6.QtGui import QFont, QColor, QPalette, QPixmap
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtMultimediaWidgets import QVideoWidget
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-# from sidebar_widget import Sidebar
+from PySide6.QtGui import QFont, QColor, QPalette
+from PySide6.QtCore import Qt
+import base64
+from PySide6.QtGui import QPixmap, QImage
+
+
 # ---------------- THEME ----------------
 C_DARK   = "#13293d"   # sidebar / header
 C_BG     = "#006494"   # main background
@@ -48,67 +44,15 @@ class Card(QFrame):
             self.v.addWidget(tb)
 
 
-class PieChart(FigureCanvas):
-    def __init__(self, data, labels, colors):
-        fig = Figure(figsize=(2.8, 2.8), dpi=100)
-        super().__init__(fig)
-        ax = fig.add_subplot(111)
-        ax.pie(
-            data, labels=None, autopct='%1.0f%%', startangle=90,
-            colors=colors, pctdistance=0.7, textprops={'color': 'white', 'fontsize': 12}
-        )
-        ax.axis('equal')
-        fig.tight_layout()
-
-
-class LegendDot(QFrame):
-    def __init__(self, text, color):
-        super().__init__()
-        h = QHBoxLayout(self)
-        h.setContentsMargins(0, 0, 0, 0)
-        swatch = QFrame()
-        swatch.setFixedSize(16, 16)
-        swatch.setStyleSheet(f"background-color:{color}; border-radius:4px;")
-        lbl = QLabel(text)
-        lbl.setStyleSheet("color: white;")
-        lbl.setFont(QFont("Inter, Arial", 12))
-        h.addWidget(swatch)
-        h.addSpacing(8)
-        h.addWidget(lbl)
-        h.addStretch(1)
 class VideoCard(Card):
     def __init__(self, title: Optional[str] = None, bg=C_CARD):
         super().__init__(title=title, bg=bg)
-
-        # QLabel để hiển thị webcam
         self.video = QLabel("Đang khởi tạo camera...")
         self.video.setAlignment(Qt.AlignCenter)
         self.video.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video.setStyleSheet("background-color: black; color: white; font-size:14px;")
         self.v.addWidget(self.video)
 
-        # Nếu muốn vẫn giữ nút chọn video demo (không cần QMediaPlayer)
-        self.btnLoad = QPushButton("Chọn video…")
-        self.btnLoad.setStyleSheet(f'''
-            QPushButton {{
-                background-color: {C_HILITE};
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{ opacity: 0.95; }}
-        ''')
-        self.v.addWidget(self.btnLoad)
-        self.btnLoad.clicked.connect(self._choose_file)
-
-    def _choose_file(self):
-        # Bạn có thể dùng để chọn video demo, nhưng hiện frame từ webcam vẫn hiển thị
-        from PySide6.QtWidgets import QFileDialog
-        f, _ = QFileDialog.getOpenFileName(self, "Chọn video demo", "", "Video (*.mp4 *.avi *.mov *.mkv)")
-        if f:
-            self.video.setText(f"Đã chọn video: {f}")
 
 # ----------------- Main Window -----------------------
 class SoatVePage(QWidget):
@@ -126,10 +70,6 @@ class SoatVePage(QWidget):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # sidebar = Sidebar(["Soát vé", "Thống kê", "Giám sát", "Dữ liệu"], self.handle_sidebar_click, parent=self)
-        # root_layout.addWidget(sidebar)
-
-        # Main content
         main = QFrame()
         main.setStyleSheet(f"background-color:{C_BG};")
         m = QVBoxLayout(main)
@@ -147,138 +87,61 @@ class SoatVePage(QWidget):
         grid.setVerticalSpacing(12)
         m.addLayout(grid, 1)
 
-        # Row 1: camera - progress+pie - camera
+        # Camera trái/phải
         self.cam_left  = VideoCard(bg=C_CARD)
         self.cam_right = VideoCard(bg=C_CARD)
-
-        # self.mid_cam_in  = VideoCard(bg=C_CARD)
-        # self.mid_cam_out = VideoCard(bg=C_CARD)
-
-        mid = Card(bg=C_HILITE, radius=14, padding=14)
-
-        def progress_row(pct, label_text, emoji):
-            row = QVBoxLayout()
-            head = QHBoxLayout()
-            lblpct = QLabel(f"{pct}%")
-            lblpct.setStyleSheet("color:white;")
-            lblpct.setFont(QFont("Inter, Arial", 15, QFont.Black))
-            head.addWidget(lblpct)
-            head.addStretch(1)
-            ic = QLabel(emoji)
-            ic.setFixedWidth(22)
-            head.addWidget(ic)
-            row.addLayout(head)
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(pct)
-            bar.setTextVisible(False)
-            bar.setFixedHeight(16)
-            bar.setStyleSheet(f'''
-                QProgressBar {{
-                    background-color: rgba(0,0,0,0.25);
-                    border-radius: 8px;
-                }}
-                QProgressBar::chunk {{
-                    background-color: {C_DARK};
-                    border-radius: 8px;
-                }}
-            ''')
-            row.addWidget(bar)
-            sub = QLabel(label_text)
-            sub.setStyleSheet("color:white;")
-            row.addWidget(sub)
-            return row
-
-        leftcol = QVBoxLayout()
-        leftcol.addLayout(progress_row(40, "Đã chiếm 40/100 chỗ xe máy", "🛵"))
-        leftcol.addSpacing(8)
-        leftcol.addLayout(progress_row(60, "Đã chiếm 60/100 chỗ ô tô", "🚗"))
-        leftcol.addStretch(1)
-
-        pie = PieChart([75, 25], ["Xe máy", "Ô tô"], [C_DARK, C_BG])
-        legend_wrap = QVBoxLayout()
-        legend_wrap.addWidget(LegendDot("Tỷ lệ loại xe", "transparent"))
-        legend_wrap.addSpacing(4)
-        legend_wrap.addWidget(LegendDot("Xe máy", C_DARK))
-        legend_wrap.addWidget(LegendDot("Ô tô", C_BG))
-        legend_wrap.addStretch(1)
-        legend_frame = QFrame()
-        legend_frame.setLayout(legend_wrap)
-
-        midrow = QHBoxLayout()
-        midrow.addLayout(leftcol, 3)
-        midrow.addWidget(pie, 2)
-        midrow.addWidget(legend_frame, 1)
-        mid.v.addLayout(midrow)
-
         grid.addWidget(self.cam_left,  0, 0, 1, 1)
-        grid.addWidget(mid,       0, 1, 1, 2)
         grid.addWidget(self.cam_right, 0, 3, 1, 1)
 
-        # Row 2-3: Xe vào / Xe ra + camera
-        xe_vao = Card(title="Xe vào", bg=C_CARD)
-        xe_vao_text = QLabel("Thời gian vào: 21:00 11/08/2025\nLoại xe: Xe máy\nVé: XM001")
-        xe_vao_text.setStyleSheet(f"color:{C_LIGHT};")
-        xe_vao.v.addWidget(xe_vao_text)
-        plate_left = QLabel()
-        plate_left.setAlignment(Qt.AlignCenter)
-        plate_left.setFixedHeight(120)
-        xe_vao.v.addWidget(plate_left)
-        cap_vao = QLabel("Biển số:\n29 - G1 333.33")
-        cap_vao.setAlignment(Qt.AlignCenter)
-        cap_vao.setStyleSheet("color:white; font-weight:700;")
-        xe_vao.v.addWidget(cap_vao)
+        # Khung xe vào
+        self.card_in = Card(title="Xe vào", bg=C_CARD)
+        self.label_in_info = QLabel("Chưa có dữ liệu")
+        self.label_in_info.setStyleSheet(f"color:{C_LIGHT};")
+        self.card_in.v.addWidget(self.label_in_info)
 
-        xe_ra = Card(title="Xe ra", bg=C_CARD)
-        xe_ra_text = QLabel("Thời gian ra: 21:00 11/08/2025\nThời gian giữ xe: 4h25p\nGiá vé: 10.000 VND\nLoại xe: Ô tô\nVé: OT001")
-        xe_ra_text.setStyleSheet(f"color:{C_LIGHT};")
-        xe_ra.v.addWidget(xe_ra_text)
-        plate_right = QLabel()
-        plate_right.setAlignment(Qt.AlignCenter)
-        plate_right.setFixedHeight(120)
-        xe_ra.v.addWidget(plate_right)
-        cap_ra = QLabel("Biển số: 30G 493.44")
-        cap_ra.setAlignment(Qt.AlignCenter)
-        cap_ra.setStyleSheet("color:white; font-weight:700;")
-        xe_ra.v.addWidget(cap_ra)
+        self.label_in_plate_img = QLabel()
+        self.label_in_plate_img.setAlignment(Qt.AlignCenter)
+        self.label_in_plate_img.setFixedHeight(120)
+        self.card_in.v.addWidget(self.label_in_plate_img)
 
-        self.mid_cam_in  = VideoCard(bg=C_CARD)
-        self.mid_cam_out = VideoCard(bg=C_CARD)
+        self.label_in_plate_text = QLabel("Biển số: ---")
+        self.label_in_plate_text.setAlignment(Qt.AlignCenter)
+        self.label_in_plate_text.setStyleSheet("color:white; font-weight:700;")
+        self.card_in.v.addWidget(self.label_in_plate_text)
 
-        grid.addWidget(xe_vao,      1, 0, 2, 1)
+        # Khung xe ra
+        self.card_out = Card(title="Xe ra", bg=C_CARD)
+        self.label_out_info = QLabel("Chưa có dữ liệu")
+        self.label_out_info.setStyleSheet(f"color:{C_LIGHT};")
+        self.card_out.v.addWidget(self.label_out_info)
+
+        self.label_out_plate_img = QLabel()
+        self.label_out_plate_img.setAlignment(Qt.AlignCenter)
+        self.label_out_plate_img.setFixedHeight(120)
+        self.card_out.v.addWidget(self.label_out_plate_img)
+
+        self.label_out_plate_text = QLabel("Biển số: ---")
+        self.label_out_plate_text.setAlignment(Qt.AlignCenter)
+        self.label_out_plate_text.setStyleSheet("color:white; font-weight:700;")
+        self.card_out.v.addWidget(self.label_out_plate_text)
+
+        # Camera giữa
+        self.mid_cam_in  = VideoCard(title="Camera vào", bg=C_CARD)
+        self.mid_cam_out = VideoCard(title="Camera ra", bg=C_CARD)
+
+        grid.addWidget(self.card_in,      1, 0, 2, 1)
         grid.addWidget(self.mid_cam_in,  1, 1, 1, 1)
         grid.addWidget(self.mid_cam_out, 1, 2, 1, 1)
-        grid.addWidget(xe_ra,       1, 3, 2, 1)
+        grid.addWidget(self.card_out,     1, 3, 2, 1)
 
-        # Row 3: Table
-        recent = Card(bg=C_HILITE)
-        header = QFrame()
-        header.setStyleSheet(f"background-color:{C_BG}; border-radius: 10px;")
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(12, 8, 12, 8)
-        htxt = QLabel("Xe gần đây")
-        htxt.setStyleSheet("color:white; font-weight:700;")
-        hl.addWidget(htxt)
-        recent.v.addWidget(header)
-
-        table = QTableWidget(3, 3)
-        table.setHorizontalHeaderLabels(["Biển số", "Trạng thái", "Thời gian"])
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        table.setSelectionMode(QAbstractItemView.NoSelection)
-
-        rows = [
-            ("20 - G1 123.44", "Ra", "20:59"),
-            ("20 - G1 123.45", "Vào", "20:58"),
-            ("29 - G1 333.33", "Vào", "20:55"),
-        ]
-        for r, row in enumerate(rows):
-            for c, val in enumerate(row):
-                item = QTableWidgetItem(val)
-                item.setTextAlignment(Qt.AlignCenter)
-                table.setItem(r, c, item)
-
-        table.setStyleSheet(f'''
+        # Table xe gần đây
+        self.recent = Card(title="Xe gần đây", bg=C_HILITE)
+        self.table_recent = QTableWidget(0, 3)
+        self.table_recent.setHorizontalHeaderLabels(["Biển số", "Trạng thái", "Thời gian"])
+        self.table_recent.verticalHeader().setVisible(False)
+        self.table_recent.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table_recent.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table_recent.setStyleSheet(f'''
             QHeaderView::section {{
                 background-color: {C_DARK};
                 color: white;
@@ -291,24 +154,70 @@ class SoatVePage(QWidget):
                 gridline-color: {C_LIGHT};
             }}
         ''')
-        table.resizeColumnsToContents()
-        recent.v.addWidget(table)
+        self.table_recent.resizeColumnsToContents()
+        self.recent.v.addWidget(self.table_recent)
 
-        grid.addWidget(recent, 2, 1, 1, 2)
-
-        # Compose
+        grid.addWidget(self.recent, 2, 1, 1, 2)
         root_layout.addWidget(main, 1)
+    def update_vehicle_info(self, direction: str, data: Optional[dict]):
+        """Cập nhật card xe vào/ra."""
+        if direction == "in":
+            label_info = self.label_in_info
+            label_plate = self.label_in_plate_text
+            label_img = self.label_in_plate_img
+        else:
+            label_info = self.label_out_info
+            label_plate = self.label_out_plate_text
+            label_img = self.label_out_plate_img
+
+        if not data:
+            label_info.setText("Chưa có dữ liệu")
+            label_plate.setText("Biển số: ---")
+            label_img.clear()
+            return
+
+        plate = data.get("plate", "---")
+        vtype = data.get("vehicle_type", "---")
+        ttype = data.get("ticket_type", "---")
+        time  = data.get("time", "---")
+
+        label_info.setText(f"Loại xe: {vtype} | Vé: {ttype}\nThời gian: {time}")
+        label_plate.setText(f"Biển số: {plate}")
+
+        # hiển thị ảnh biển số (nếu có)
+        b64img = data.get("license_plate_image")
+        if b64img:
+            try:
+                img_bytes = base64.b64decode(b64img)
+                image = QImage.fromData(img_bytes)
+                pixmap = QPixmap.fromImage(image)
+                label_img.setPixmap(pixmap.scaled(
+                    label_img.width(), label_img.height(),
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation
+                ))
+            except Exception as e:
+                print("Decode ảnh lỗi:", e)
+                label_img.clear()
+        else:
+            label_img.clear()
+
+        # Ghi thêm vào bảng xe gần đây
+        self.add_recent(plate, data.get("event_type", "---"), time)
+    def add_recent(self, plate: str, status: str, time: str):
+        """Thêm xe vào bảng 'Xe gần đây' (hiển thị 10 xe mới nhất)."""
+        row = self.table_recent.rowCount()
+        self.table_recent.insertRow(0)  # thêm ở đầu bảng
+        self.table_recent.setItem(0, 0, QTableWidgetItem(plate))
+        self.table_recent.setItem(0, 1, QTableWidgetItem(status))
+        self.table_recent.setItem(0, 2, QTableWidgetItem(time))
+
+        # giữ tối đa 10 dòng
+        if row >= 10:
+            self.table_recent.removeRow(row)
 
 
-    # def handle_sidebar_click(self):
-    #     # TODO: viết xử lý khi click menu
-    #     btn = self.sender()
-    #     print(f"Bạn vừa chọn: {btn.text()}")
-
-
-# if __name__ == "__main__":
-#     app = QApplication(sys.argv)
-#     win = ParkingDashboard()
-#     win.show()
-#     sys.exit(app.exec())
-    
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    win = SoatVePage()
+    win.show()
+    sys.exit(app.exec())
