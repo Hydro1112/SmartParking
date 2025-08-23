@@ -10,6 +10,9 @@ import base64
 from server.utils.readLicensePlate import readLicensePlate
 from server.sort.sort import Sort
 
+# Thay đổi import: Bỏ các hàm DB cũ, import lớp Model 'Vehicle'
+from server.database.database_manager import DatabaseManager, Vehicle
+
 # ---------------------- Config ----------------------
 CAM_W, CAM_H = 480, 480
 YOLO_CONF = 0.20
@@ -58,12 +61,14 @@ class PlateDetector:
     """
     _shared_models = None  # cache models giữa nhiều instance
 
-    def __init__(self):
+    # Thay đổi __init__: Thêm db_manager làm tham số
+    def __init__(self, db_manager: DatabaseManager, event_label=None):
         if PlateDetector._shared_models is None:
             PlateDetector._shared_models = _init_models()
         self.model_frcnn, self.model_yolo, self.YOLO_HALF = PlateDetector._shared_models
 
         self.tracker = Sort()
+        self.db_manager = db_manager  # Lưu lại instance của manager
 
         # Lịch sử bỏ phiếu theo từng xe: car_id -> deque([...])
         self.car_plate_history = {}  # {car_id: deque([...], maxlen=HISTORY_LEN)}
@@ -71,16 +76,20 @@ class PlateDetector:
         # Biển số đã log theo từng xe: car_id -> (text, conf)
         self.logged_cars = {}
 
+        # Thêm event_label (in/out)
+        self.event_label = event_label
+
     def process(self, frame: np.ndarray):
         """
         Trả về metadata JSON:
         {
             "plates": [...],
-            "image_full": <base64 ảnh gốc>
+            "image_full": <base64 ảnh gốc>,
+            "event": "in"/"out"
         }
         """
         if frame is None or frame.size == 0:
-            return {"plates": [], "image_full": None}
+            return {"plates": [], "image_full": None, "event": self.event_label}
 
         metadata = {"plates": []}
 
@@ -140,14 +149,45 @@ class PlateDetector:
 
                 # Chỉ add nếu đã vote đủ
                 if best_count >= MIN_VOTES:
+                    plate_text = best_text
+                    vehicle_type = car_info[idx][4] if idx < len(car_info) else "unknown"
+
+                    # Thay thế logic DB cũ bằng DatabaseManager
+                    # =========================================================
+                    # 1. Kiểm tra xe đã có trong DB chưa bằng biển số
+                    existing_vehicle = self.db_manager.get_vehicle_by_plate(plate_text)
+
+                    # 2. Nếu xe chưa có, tạo bản ghi mới
+                    if existing_vehicle is None:
+                        # Convert ảnh crop sang base64
+                        _, buf = cv2.imencode(".jpg", vehicle_crop)
+                        img_b64 = base64.b64encode(buf).decode("utf-8")
+                        
+                        # Tạo đối tượng Vehicle
+                        new_vehicle = Vehicle(
+                            id=str(car_id),
+                            plate=plate_text,
+                            vehicle_type=vehicle_type,
+                            license_plate_image=img_b64
+                        )
+                        # Dùng manager để tạo
+                        self.db_manager.create_vehicle(new_vehicle)
+                        print(f"[AI] 🆕 Xe mới được phát hiện và lưu vào DB: {plate_text}")
+                    # =========================================================
+
                     metadata["plates"].append({
                         "car_id": int(car_id),
-                        "plate": best_text,
-                        "vehicle_type": car_info[idx][4] if idx < len(car_info) else "unknown"
+                        "plate": plate_text,
+                        "vehicle_type": vehicle_type
                     })
+
 
         # ---------------- Gửi kèm ảnh gốc ----------------
         _, buf = cv2.imencode(".jpg", frame)
         metadata["image_full"] = base64.b64encode(buf).decode("utf-8")
 
+        # ---------------- Thêm event (in/out) ----------------
+        metadata["event"] = self.event_label
+        
         return metadata
+

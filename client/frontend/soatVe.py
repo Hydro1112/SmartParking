@@ -6,6 +6,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QFont, QColor, QPalette
 from PySide6.QtCore import Qt
+import base64
+from PySide6.QtGui import QPixmap, QImage
+
 
 # ---------------- THEME ----------------
 C_DARK   = "#13293d"   # sidebar / header
@@ -156,6 +159,61 @@ class SoatVePage(QWidget):
 
         grid.addWidget(self.recent, 2, 1, 1, 2)
         root_layout.addWidget(main, 1)
+    def update_vehicle_info(self, direction: str, data: Optional[dict]):
+        """Cập nhật card xe vào/ra."""
+        if direction == "in":
+            label_info = self.label_in_info
+            label_plate = self.label_in_plate_text
+            label_img = self.label_in_plate_img
+        else:
+            label_info = self.label_out_info
+            label_plate = self.label_out_plate_text
+            label_img = self.label_out_plate_img
+
+        if not data:
+            label_info.setText("Chưa có dữ liệu")
+            label_plate.setText("Biển số: ---")
+            label_img.clear()
+            return
+
+        plate = data.get("plate", "---")
+        vtype = data.get("vehicle_type", "---")
+        ttype = data.get("ticket_type", "---")
+        time  = data.get("time", "---")
+
+        label_info.setText(f"Loại xe: {vtype} | Vé: {ttype}\nThời gian: {time}")
+        label_plate.setText(f"Biển số: {plate}")
+
+        # hiển thị ảnh biển số (nếu có)
+        b64img = data.get("license_plate_image")
+        if b64img:
+            try:
+                img_bytes = base64.b64decode(b64img)
+                image = QImage.fromData(img_bytes)
+                pixmap = QPixmap.fromImage(image)
+                label_img.setPixmap(pixmap.scaled(
+                    label_img.width(), label_img.height(),
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation
+                ))
+            except Exception as e:
+                print("Decode ảnh lỗi:", e)
+                label_img.clear()
+        else:
+            label_img.clear()
+
+        # Ghi thêm vào bảng xe gần đây
+        self.add_recent(plate, data.get("event_type", "---"), time)
+    def add_recent(self, plate: str, status: str, time: str):
+        """Thêm xe vào bảng 'Xe gần đây' (hiển thị 10 xe mới nhất)."""
+        row = self.table_recent.rowCount()
+        self.table_recent.insertRow(0)  # thêm ở đầu bảng
+        self.table_recent.setItem(0, 0, QTableWidgetItem(plate))
+        self.table_recent.setItem(0, 1, QTableWidgetItem(status))
+        self.table_recent.setItem(0, 2, QTableWidgetItem(time))
+
+        # giữ tối đa 10 dòng
+        if row >= 10:
+            self.table_recent.removeRow(row)
 
 
 if __name__ == "__main__":
