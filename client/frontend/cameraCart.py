@@ -1,6 +1,8 @@
+# FILE: client/frontend/cameraCart.py (ĐÃ SỬA LỖI KÍCH THƯỚC)
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QFrame, QLabel, QPushButton, QGridLayout, QSplitter, QApplication
+    QFrame, QLabel, QPushButton, QGridLayout, QSplitter, QApplication, QSizePolicy
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
@@ -22,11 +24,16 @@ class CameraCard(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # video placeholder
-        video = QLabel("VIDEO")
-        video.setStyleSheet("background-color: black; border-radius:8px; color:white;")
-        video.setFixedSize(500, 300) 
-        video.setAlignment(Qt.AlignCenter)
-        layout.addWidget(video)
+        self.video = QLabel("VIDEO")
+        self.video.setStyleSheet("background-color: black; border-radius:8px; color:white;")
+        
+        # ✨ THAY ĐỔI QUAN TRỌNG: Bỏ kích thước cố định, cho phép co giãn
+        # self.video.setFixedSize(500, 300) # <-- XÓA DÒNG NÀY
+        self.video.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video.setMinimumSize(320, 180) # Đặt kích thước tối thiểu hợp lý
+        
+        self.video.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.video)
 
         # camera label
         label = QLabel(name)
@@ -47,6 +54,7 @@ class CameraCard(QFrame):
 class CameraPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setStyleSheet(f"background-color:{C_BG};") # Đặt màu nền chung
 
         # ==== HEADER ====
         header = QHBoxLayout()
@@ -67,12 +75,13 @@ class CameraPage(QWidget):
 
         headerWidget = QWidget()
         headerWidget.setLayout(header)
-        headerWidget.setFixedHeight(36)  
+        headerWidget.setFixedHeight(36)
         headerWidget.setStyleSheet(f"background-color:{C_HEADER};")
 
         # ==== SIDEBAR ====
         sidebar = QVBoxLayout()
         sidebar.setSpacing(16)
+        sidebar.setContentsMargins(10, 10, 10, 10)
 
         area_label = QLabel("Khu vực")
         area_label.setStyleSheet(f"color: {C_LIGHT}; font-size: 20px; font-weight: bold;")
@@ -81,36 +90,20 @@ class CameraPage(QWidget):
         areas = ["Cổng chính", "Khu A", "Khu B", "Tầng hầm"]
         for area in areas:
             lbl = QLabel(area)
-            lbl.setStyleSheet(f"color: {C_LIGHT}; font-size: 20px; text-align: center;")
+            lbl.setStyleSheet(f"color: {C_LIGHT}; font-size: 16px;")
             sidebar.addWidget(lbl)
+        sidebar.addStretch(1)
 
-        # Cảnh báo
         warn_label = QLabel("Cảnh báo")
         warn_label.setStyleSheet(f"color: {C_LIGHT}; font-size: 20px; font-weight: bold; margin-top: 12px;")
         sidebar.addWidget(warn_label)
 
-        warnings = [
-            ("Cam 7: Khói phát hiện", "orange"),
-            ("Cam 12: Mất tín hiệu", "red"),
-        ]
+        warnings = [("Cam 5: Mất tín hiệu", "red"), ("Cam 13: Mất tín hiệu", "red")]
         for text, color in warnings:
             lbl = QLabel(f"● {text}")
-            lbl.setStyleSheet(f"color: {color}; font-size: 14px; text-align: center;")
+            lbl.setStyleSheet(f"color: {color}; font-size: 14px;")
             sidebar.addWidget(lbl)
-
-        sidebar.addStretch()
-
-        # Legend trạng thái
-        status_box = QVBoxLayout()
-        for text, color in [
-            ("Hoạt động", "lime"),
-            ("Mất tín hiệu", "red"),
-            ("Cảnh báo", "orange"),
-        ]:
-            lbl = QLabel(f"● {text}")
-            lbl.setStyleSheet(f"color: {color}; font-size: 14px; text-align: center;")
-            status_box.addWidget(lbl)
-        sidebar.addLayout(status_box)
+        sidebar.addStretch(2)
 
         sidebarWidget = QWidget()
         sidebarWidget.setLayout(sidebar)
@@ -121,52 +114,25 @@ class CameraPage(QWidget):
         grid = QGridLayout()
         grid.setSpacing(12)
         cams = [
-            ("Camera 1 - Cổng chính", False),
-            ("Camera 2 - Khu A", False),
-            ("Camera 7 - Khu A", True),
-            ("Camera 8 - Khu B", False),
-            ("Camera 12 - Hầm", True),
-            ("Camera 6 - Khu B", False),
+            ("Camera 1 - Cổng chính", False), ("Camera 2 - Khu A", False), ("Camera 3 - Khu A", True),
+            ("Camera 4 - Khu B", False), ("Camera 5 - Hầm", True), ("Camera 6 - Khu B", False),
         ]
         for i, (name, alert) in enumerate(cams):
             grid.addWidget(CameraCard(name, alert), i // 3, i % 3)
 
         gridWidget = QWidget()
         gridWidget.setLayout(grid)
-        gridWidget.setStyleSheet(f"background-color:{C_BG}; padding:4px;")  
 
         # ==== SPLITTER ====
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(gridWidget)  # Thêm gridWidget trước
-        splitter.addWidget(sidebarWidget)  # Thêm sidebarWidget sau
-        splitter.setStretchFactor(0, 5)  # Grid chiếm phần lớn không gian
-        splitter.setStretchFactor(1, 1)  # Sidebar chiếm ít không gian hơn
+        splitter.addWidget(gridWidget)
+        splitter.addWidget(sidebarWidget)
+        splitter.setStretchFactor(0, 5)
+        splitter.setStretchFactor(1, 1)
 
         # ==== MAIN LAYOUT ====
-        mainLayout = QVBoxLayout()
+        mainLayout = QVBoxLayout(self)
+        mainLayout.setContentsMargins(0, 0, 0, 0)
+        mainLayout.setSpacing(0)
         mainLayout.addWidget(headerWidget)
         mainLayout.addWidget(splitter)
-
-        # ==== FOOTER ====
-        footer = QWidget()
-        footer_layout = QHBoxLayout()
-        footer_layout.setContentsMargins(20, 6, 20, 6)
-
-        footer_label = QLabel("Camera: 12 (🟢 10 / 🔴 2) | Alert: 1 active")
-        footer_label.setStyleSheet(f"color: {C_LIGHT}; font-size: 14px; font-weight: bold;")
-        footer_layout.addWidget(footer_label, alignment=Qt.AlignCenter)
-
-        footer.setLayout(footer_layout)
-        footer.setFixedHeight(36)
-        footer.setStyleSheet(f"background-color: {C_HEADER};")
-
-        mainLayout.addWidget(footer)
-
-        self.setLayout(mainLayout)
-
-if __name__ == "__main__":
-    app = QApplication([])
-    app.setStyle("Fusion")
-    window = CameraPage()
-    window.show()
-    app.exec()

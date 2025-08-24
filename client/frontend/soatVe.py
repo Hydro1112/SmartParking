@@ -1,4 +1,4 @@
-# FILE: frontend/soatVe.py (FINAL VERSION - UPDATED)
+# FILE: frontend/soatVe.py (FINAL VERSION - UPDATED WITH LAYOUT ADJUSTMENTS)
 # ----------------------------------------------------------------------
 import sys
 from typing import Optional
@@ -24,55 +24,125 @@ class Card(QFrame):
         super().__init__()
         self.setObjectName("Card")
         self.setStyleSheet(f'QFrame#Card {{ background-color: {bg}; border-radius: {radius}px; }}')
-        self.v = QVBoxLayout(self); self.v.setContentsMargins(padding, padding, padding, padding); self.v.setSpacing(10)
+        self.v = QVBoxLayout(self)
+        self.v.setContentsMargins(padding, padding, padding, padding)
+        self.v.setSpacing(10)
         if title:
-            tb = QFrame(); tb.setStyleSheet(f"background-color: {title_bg}; border-radius: 10px;"); tl = QHBoxLayout(tb); tl.setContentsMargins(12, 8, 12, 8)
-            t = QLabel(title); t.setStyleSheet("color: white;"); t.setFont(QFont("Inter, Arial", 16, QFont.Bold)); tl.addWidget(t); self.v.addWidget(tb)
+            tb = QFrame()
+            tb.setStyleSheet(f"background-color: {title_bg}; border-radius: 10px;")
+            tl = QHBoxLayout(tb)
+            tl.setContentsMargins(12, 8, 12, 8)
+            t = QLabel(title)
+            t.setStyleSheet("color: white;")
+            t.setFont(QFont("Inter, Arial", 16, QFont.Bold))
+            tl.addWidget(t)
+            self.v.addWidget(tb)
 
 class VideoCard(Card):
     def __init__(self, title: Optional[str] = None, bg=C_CARD):
         super().__init__(title=title, bg=bg)
-        self.video = QLabel("Đang khởi tạo camera..."); self.video.setAlignment(Qt.AlignCenter); self.video.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video.setStyleSheet("background-color: black; color: white; font-size:14px;"); self.v.addWidget(self.video)
+        self.video = QLabel("Đang khởi tạo camera...")
+        self.video.setAlignment(Qt.AlignCenter)
+        self.video.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video.setStyleSheet("background-color: black; color: white; font-size:14px;")
+        self.v.addWidget(self.video)
 
 # ----------------- Main Window -----------------------
 class SoatVePage(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Soát vé - Smart Parking"); self.resize(1400, 800)
-        self.setAutoFillBackground(True); pal = self.palette(); pal.setColor(QPalette.Window, QColor(C_BG)); self.setPalette(pal)
-        root_layout = QHBoxLayout(self); root_layout.setContentsMargins(0, 0, 0, 0); root_layout.setSpacing(0)
-        main = QFrame(); main.setStyleSheet(f"background-color:{C_BG};"); m = QVBoxLayout(main); m.setContentsMargins(16, 10, 16, 16); m.setSpacing(10)
-        title = QLabel("Soát vé"); title.setAlignment(Qt.AlignCenter); title.setFont(QFont("Inter, Arial", 20, QFont.Black)); title.setStyleSheet("color:white;"); m.addWidget(title)
-        grid = QGridLayout(); grid.setHorizontalSpacing(12); grid.setVerticalSpacing(12); m.addLayout(grid, 1)
+        self.setWindowTitle("Soát vé - Smart Parking")
+        self.resize(1400, 800)
+        self.setAutoFillBackground(True)
+        pal = self.palette()
+        pal.setColor(QPalette.Window, QColor(C_BG))
+        self.setPalette(pal)
+        
+        root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        
+        main = QFrame()
+        main.setStyleSheet(f"background-color:{C_BG};")
+        m = QVBoxLayout(main)
+        m.setContentsMargins(16, 10, 16, 16)
+        m.setSpacing(10)
+        
+        title = QLabel("Soát vé")
+        title.setAlignment(Qt.AlignCenter)
+        title.setFont(QFont("Inter, Arial", 20, QFont.Black))
+        title.setStyleSheet("color:white;")
+        m.addWidget(title)
+        
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
+        m.addLayout(grid, 1)
 
         # Khung xe vào
         self.card_in = Card(title="Xe vào", bg=C_CARD)
-        self.label_in_info = QLabel("Chưa có dữ liệu"); self.label_in_info.setStyleSheet(f"color:{C_LIGHT}; font-size: 14px;"); self.card_in.v.addWidget(self.label_in_info)
-        self.label_in_plate_img = QLabel(); self.label_in_plate_img.setAlignment(Qt.AlignCenter); self.label_in_plate_img.setMinimumHeight(120)
+        self.label_in_info = QLabel("Chưa có dữ liệu")
+        self.label_in_info.setStyleSheet(f"color:{C_LIGHT}; font-size: 14px;")
+        self.card_in.v.addWidget(self.label_in_info)
+        self.label_in_plate_img = QLabel()
+        self.label_in_plate_img.setAlignment(Qt.AlignCenter)
+        self.label_in_plate_img.setMinimumHeight(120)
         self.label_in_plate_img.setScaledContents(True)
         self.card_in.v.addWidget(self.label_in_plate_img)
-        self.label_in_plate_text = QLabel("---"); self.label_in_plate_text.setAlignment(Qt.AlignCenter); self.label_in_plate_text.setFont(QFont("Inter, Arial", 18, QFont.Bold)); self.label_in_plate_text.setStyleSheet("color:white;"); self.card_in.v.addWidget(self.label_in_plate_text); self.card_in.v.addStretch()
+        self.label_in_plate_text = QLabel("---")
+        self.label_in_plate_text.setAlignment(Qt.AlignCenter)
+        self.label_in_plate_text.setFont(QFont("Inter, Arial", 18, QFont.Bold))
+        self.label_in_plate_text.setStyleSheet("color:white;")
+        self.card_in.v.addWidget(self.label_in_plate_text)
+        self.card_in.v.addStretch()
 
         # Khung xe ra
         self.card_out = Card(title="Xe ra", bg=C_CARD)
-        self.label_out_info = QLabel("Chưa có dữ liệu"); self.label_out_info.setStyleSheet(f"color:{C_LIGHT}; font-size: 14px;"); self.card_out.v.addWidget(self.label_out_info)
-        self.label_out_plate_img = QLabel(); self.label_out_plate_img.setAlignment(Qt.AlignCenter); self.label_out_plate_img.setMinimumHeight(120)
+        self.label_out_info = QLabel("Chưa có dữ liệu")
+        self.label_out_info.setStyleSheet(f"color:{C_LIGHT}; font-size: 14px;")
+        self.card_out.v.addWidget(self.label_out_info)
+        self.label_out_plate_img = QLabel()
+        self.label_out_plate_img.setAlignment(Qt.AlignCenter)
+        self.label_out_plate_img.setMinimumHeight(120)
         self.label_out_plate_img.setScaledContents(True)
         self.card_out.v.addWidget(self.label_out_plate_img)
-        self.label_out_plate_text = QLabel("---"); self.label_out_plate_text.setAlignment(Qt.AlignCenter); self.label_out_plate_text.setFont(QFont("Inter, Arial", 18, QFont.Bold)); self.label_out_plate_text.setStyleSheet("color:white;"); self.card_out.v.addWidget(self.label_out_plate_text); self.card_out.v.addStretch()
+        self.label_out_plate_text = QLabel("---")
+        self.label_out_plate_text.setAlignment(Qt.AlignCenter)
+        self.label_out_plate_text.setFont(QFont("Inter, Arial", 18, QFont.Bold))
+        self.label_out_plate_text.setStyleSheet("color:white;")
+        self.card_out.v.addWidget(self.label_out_plate_text)
+        self.card_out.v.addStretch()
 
         # Camera và Bảng
-        self.mid_cam_in  = VideoCard(title="Camera Vào", bg=C_DARK); self.mid_cam_out = VideoCard(title="Camera Ra", bg=C_DARK)
-        grid.addWidget(self.card_in, 0, 0, 2, 1); grid.addWidget(self.mid_cam_in,  0, 1, 1, 1); grid.addWidget(self.mid_cam_out, 0, 2, 1, 1); grid.addWidget(self.card_out, 0, 3, 2, 1)
+        self.mid_cam_in  = VideoCard(title="Camera Vào", bg=C_DARK)
+        self.mid_cam_out = VideoCard(title="Camera Ra", bg=C_DARK)
+        grid.addWidget(self.card_in, 0, 0, 2, 1)
+        grid.addWidget(self.mid_cam_in,  0, 1, 1, 1)
+        grid.addWidget(self.mid_cam_out, 0, 2, 1, 1)
+        grid.addWidget(self.card_out, 0, 3, 2, 1)
+        
         self.recent = Card(title="Lịch sử gần đây", bg=C_HILITE)
         
-        # ✨ THAY ĐỔI 1: Tăng số cột từ 5 lên 6
         self.table_recent = QTableWidget(0, 6)
-        # ✨ THAY ĐỔI 2: Thêm "Mã vé" vào header
         self.table_recent.setHorizontalHeaderLabels(["Biển số", "Mã vé", "Loại xe", "Loại vé", "Thời gian", "Trạng thái"])
-        
-        self.table_recent.verticalHeader().setVisible(False); self.table_recent.setEditTriggers(QAbstractItemView.NoEditTriggers); self.table_recent.setSelectionMode(QAbstractItemView.NoSelection); self.table_recent.setStyleSheet(f'QHeaderView::section{{background-color:{C_DARK};color:white;padding:6px;border:none;font-weight:bold;}} QTableWidget{{background-color:transparent;color:white;gridline-color:{C_LIGHT}30;}}'); self.table_recent.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch); self.recent.v.addWidget(self.table_recent); grid.addWidget(self.recent, 1, 1, 1, 2); root_layout.addWidget(main, 1)
+        self.table_recent.verticalHeader().setVisible(False)
+        self.table_recent.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table_recent.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table_recent.setStyleSheet(f'QHeaderView::section{{background-color:{C_DARK};color:white;padding:6px;border:none;font-weight:bold;}} QTableWidget{{background-color:transparent;color:white;gridline-color:{C_LIGHT}30;}}')
+        self.table_recent.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.recent.v.addWidget(self.table_recent)
+        grid.addWidget(self.recent, 1, 1, 1, 2)
+
+        # ✨ ================== THÊM PHẦN ĐIỀU CHỈNH LAYOUT ==================
+        # Thiết lập tỉ lệ co giãn cho các cột của grid để thu nhỏ camera.
+        # Cột 0 (Xe vào) và 3 (Xe ra) sẽ được ưu tiên không gian hơn.
+        grid.setColumnStretch(0, 3) # Tỉ lệ 3 cho card thông tin
+        grid.setColumnStretch(1, 2) # Tỉ lệ 2 cho camera
+        grid.setColumnStretch(2, 2) # Tỉ lệ 2 cho camera
+        grid.setColumnStretch(3, 3) # Tỉ lệ 3 cho card thông tin
+        # ===================================================================
+
+        root_layout.addWidget(main, 1)
 
     def update_cards(self, latest_in: Optional[dict], latest_out: Optional[dict]):
         self._update_single_card("in", latest_in)
@@ -85,13 +155,23 @@ class SoatVePage(QWidget):
             label_info, label_plate, label_img = self.label_out_info, self.label_out_plate_text, self.label_out_plate_img
 
         if not data:
-            label_info.setText("Chưa có dữ liệu"); label_plate.setText("---"); label_img.clear(); return
+            label_info.setText("Chưa có dữ liệu")
+            label_plate.setText("---")
+            label_img.clear()
+            return
 
-        plate = data.get("plate", "---"); vtype = data.get("vehicle_type", "---").capitalize(); ttype = data.get("ticket_type", "---").capitalize(); time  = data.get("time", "---")
-        # ✨ THAY ĐỔI 3: Hiển thị mã vé trên card
+        plate = data.get("plate", "---")
+        vtype = data.get("vehicle_type", "---").capitalize()
+        ttype = data.get("ticket_type", "---").capitalize()
+        time  = data.get("time", "---")
         ticket_id = data.get("ticket_id", "---")
-        info_text = f"<b style='color:#ffffff;'>Mã vé:</b> {ticket_id}<br><b style='color:#ffffff;'>Loại xe:</b> {vtype}<br><b style='color:#ffffff;'>Loại vé:</b> {ttype}<br><b style='color:#ffffff;'>Thời gian:</b> {time}"
-        label_info.setText(info_text); label_plate.setText(plate)
+        
+        info_text = f"<b style='color:#ffffff;'>Mã vé:</b> {ticket_id}<br>" \
+                    f"<b style='color:#ffffff;'>Loại xe:</b> {vtype}<br>" \
+                    f"<b style='color:#ffffff;'>Loại vé:</b> {ttype}<br>" \
+                    f"<b style='color:#ffffff;'>Thời gian:</b> {time}"
+        label_info.setText(info_text)
+        label_plate.setText(plate)
 
         b64img = data.get("license_plate_image")
         if b64img:
@@ -101,14 +181,16 @@ class SoatVePage(QWidget):
                 pixmap.loadFromData(img_bytes)
                 label_img.setPixmap(pixmap)
             except Exception as e:
-                print(f"[UI] Lỗi decode ảnh cho biển số {plate}:", e); label_img.clear()
+                print(f"[UI] Lỗi decode ảnh cho biển số {plate}:", e)
+                label_img.clear()
         else:
             label_img.clear()
 
     def add_to_history(self, data: dict):
-        if not data: return
+        if not data: 
+            return
+            
         plate = data.get("plate", "---")
-        # ✨ THAY ĐỔI 4: Lấy thêm ticket_id
         ticket_id = data.get("ticket_id", "---")
         vtype = data.get("vehicle_type", "---").capitalize()
         ttype = data.get("ticket_type", "---").capitalize()
@@ -116,12 +198,12 @@ class SoatVePage(QWidget):
         status = data.get("event_type", "---")
         display_status = "Vào" if status == "in" else "Ra"
         
+        # Ngăn việc thêm các bản ghi trùng lặp liên tiếp
         if self.table_recent.rowCount() > 0:
-            if (self.table_recent.item(0, 0).text() == plate and self.table_recent.item(0, 5).text() == display_status): # Cột trạng thái giờ là 5
+            if (self.table_recent.item(0, 0).text() == plate and self.table_recent.item(0, 5).text() == display_status):
                 return
 
         self.table_recent.insertRow(0)
-        # ✨ THAY ĐỔI 5: Thêm ticket_id vào danh sách item
         items = [
             QTableWidgetItem(plate), QTableWidgetItem(ticket_id), QTableWidgetItem(vtype),
             QTableWidgetItem(ttype), QTableWidgetItem(time), QTableWidgetItem(display_status)
@@ -131,11 +213,15 @@ class SoatVePage(QWidget):
             item.setTextAlignment(Qt.AlignCenter)
             self.table_recent.setItem(0, i, item)
 
-        status_item = self.table_recent.item(0, 5) # Cột trạng thái giờ là 5
-        if status == "in": status_item.setBackground(QColor("#1b98e0"))
-        else: status_item.setBackground(QColor("#e01b6a"))
+        status_item = self.table_recent.item(0, 5) # Cột trạng thái là cột thứ 6 (index 5)
+        if status == "in": 
+            status_item.setBackground(QColor("#1b98e0"))
+        else: 
+            status_item.setBackground(QColor("#e01b6a"))
 
-        if self.table_recent.rowCount() > 10: self.table_recent.removeRow(10)
+        # Giới hạn bảng chỉ hiển thị 10 mục gần nhất
+        if self.table_recent.rowCount() > 10: 
+            self.table_recent.removeRow(10)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

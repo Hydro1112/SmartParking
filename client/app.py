@@ -312,6 +312,7 @@ if __name__ == "__main__":
     import qasync
     app = QApplication(sys.argv)
     window = App()
+    window.showMaximized()
     window.show()
     loop = qasync.QEventLoop(app); asyncio.set_event_loop(loop)
     with loop: loop.run_until_complete(window.start())
