@@ -352,6 +352,7 @@ class DatabaseManager:
             ORDER BY id DESC 
             LIMIT ?
         """
+        
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
