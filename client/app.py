@@ -76,6 +76,7 @@ class App(ParkingDashboard):
 
     async def start(self):
         await self.update_status_cards(); await self.populate_initial_history()
+        self.thongke_page.start_initial_fetch()
         await asyncio.gather(self.run_camera(0, "in"), self.run_camera(1, "out"))
 
     def _unwrap_history_data(self, data):

@@ -210,3 +210,18 @@ async def get_recent_history(limit: int = 10):
     recent_history_events = db_manager.get_recent_history(limit=limit)
     enriched_results = [_enrich_history(event) for event in recent_history_events]
     return enriched_results
+
+@app.get("/api/stats")
+async def get_stats_data(start_date: str, end_date: str):
+    """
+    Cung cấp dữ liệu thống kê cho dashboard.
+    - start_date, end_date: Chuỗi ISO format (vd: '2025-08-23T12:00:00')
+    """
+    try:
+        stats = db_manager.get_dashboard_statistics(start_date, end_date)
+        return stats
+    except Exception as e:
+        print(f"[SERVER] ❌ Lỗi khi lấy dữ liệu thống kê: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Lỗi server khi xử lý thống kê: {e}")
+

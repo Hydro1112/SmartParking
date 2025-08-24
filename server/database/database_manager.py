@@ -2,6 +2,7 @@ import sqlite3
 import datetime
 from pathlib import Path
 from typing import List, Optional, Any
+import pandas as pd
 
 # --- ĐỊNH NGHĨA CÁC LỚP MODEL DỮ LIỆU ---
 # Các lớp này đại diện cho cấu trúc của mỗi bảng trong database.
@@ -371,3 +372,115 @@ class DatabaseManager:
         with self._get_connection() as conn:
             row = conn.execute(sql, (plate,)).fetchone()
             return Ticket(**row) if row else None
+        
+    def get_dashboard_statistics(self, start_date: str, end_date: str) -> dict:
+        """
+        Tổng hợp tất cả dữ liệu thống kê cho dashboard trong một khoảng thời gian.
+        Sử dụng Pandas để tăng tốc độ xử lý.
+        """
+        with self._get_connection() as conn:
+            # --- 1. Lấy dữ liệu thô từ các bảng liên quan ---
+            
+            # Lịch sử vào ra cho biểu đồ
+            history_df = pd.read_sql_query(
+                "SELECT timestamp, event_type FROM history WHERE timestamp BETWEEN ? AND ?",
+                conn, params=(start_date, end_date)
+            )
+            # Thanh toán và thời gian checkout để tính doanh thu
+            payments_df = pd.read_sql_query(
+                """
+                SELECT p.amount, t.checkout_time
+                FROM payments p JOIN tickets t ON p.ticket_id = t.id
+                WHERE t.checkout_time BETWEEN ? AND ?
+                """,
+                conn, params=(start_date, end_date)
+            )
+            # Vé đã đóng để tính thời gian gửi trung bình
+            closed_tickets_df = pd.read_sql_query(
+                "SELECT duration FROM tickets WHERE status = 'closed' AND checkout_time BETWEEN ? AND ?",
+                conn, params=(start_date, end_date)
+            )
+
+            # --- 2. Tính toán các chỉ số KPI ---
+            
+            # Tỷ lệ lấp đầy (không phụ thuộc thời gian)
+            occupancy_data = conn.execute("SELECT SUM(current_occupancy), SUM(capacity) FROM parking_lot").fetchone()
+            
+            # Vé đang hoạt động (không phụ thuộc thời gian)
+            active_tickets_count = conn.execute("SELECT COUNT(*) FROM tickets WHERE status = 'active'").fetchone()[0]
+
+            kpis = {
+                "occupancy": {
+                    "current": occupancy_data[0] or 0,
+                    "capacity": occupancy_data[1] or 1,
+                },
+                "revenue": payments_df['amount'].sum(),
+                "active_tickets": active_tickets_count,
+                "avg_dwell_time_minutes": closed_tickets_df['duration'].mean()
+            }
+
+            # --- 3. Chuẩn bị dữ liệu cho biểu đồ ---
+            
+            # Biểu đồ Lượt vào/ra
+            traffic_chart = {}
+            if not history_df.empty:
+                history_df['timestamp'] = pd.to_datetime(history_df['timestamp'])
+                history_df.set_index('timestamp', inplace=True)
+                daily_traffic = history_df.groupby([history_df.index.date, 'event_type']).size().unstack(fill_value=0)
+                daily_traffic.index = pd.to_datetime(daily_traffic.index)
+                # Tạo dải ngày đầy đủ để không bị thiếu ngày
+                full_date_range = pd.date_range(start=start_date.split('T')[0], end=end_date.split('T')[0], freq='D')
+                daily_traffic = daily_traffic.reindex(full_date_range.date, fill_value=0)
+                
+                traffic_chart = {
+                    "dates": [d.strftime('%Y-%m-%d') for d in daily_traffic.index],
+                    "in_counts": daily_traffic.get('in', pd.Series(0, index=daily_traffic.index)).tolist(),
+                    "out_counts": daily_traffic.get('out', pd.Series(0, index=daily_traffic.index)).tolist(),
+                }
+            
+            # Biểu đồ Doanh thu
+            revenue_chart = {}
+            if not payments_df.empty:
+                payments_df['checkout_time'] = pd.to_datetime(payments_df['checkout_time'])
+                payments_df.set_index('checkout_time', inplace=True)
+                daily_revenue = payments_df.resample('D')['amount'].sum()
+                revenue_chart = {
+                    "dates": [d.strftime('%Y-%m-%d') for d in daily_revenue.index],
+                    "amounts": daily_revenue.values.tolist()
+                }
+
+            # Biểu đồ nhiệt Mật độ
+            heatmap_chart = [[0] * 24 for _ in range(7)] # 7 ngày x 24 giờ
+            if not history_df.empty and 'in' in history_df['event_type'].unique():
+                checkins_df = history_df[history_df['event_type'] == 'in']
+                # index 0 = Monday, 6 = Sunday for dayofweek
+                checkins_df['day_of_week'] = checkins_df.index.dayofweek
+                checkins_df['hour'] = checkins_df.index.hour
+                density = checkins_df.groupby(['day_of_week', 'hour']).size().unstack(fill_value=0)
+                # Điền dữ liệu vào ma trận heatmap
+                for day, row in density.iterrows():
+                    for hour, count in row.items():
+                        heatmap_chart[day][hour] = count
+
+            # --- 4. Lấy thông tin phụ ---
+
+            # Tình trạng vé (không phụ thuộc thời gian)
+            ticket_status_rows = conn.execute("SELECT ticket_type, status, COUNT(*) FROM tickets GROUP BY ticket_type, status").fetchall()
+            ticket_status = [{"type": row[0], "status": row[1], "count": row[2]} for row in ticket_status_rows]
+            
+            # Cảnh báo chưa xử lý
+            alert_rows = conn.execute("SELECT message, severity FROM alerts WHERE resolved = 0 ORDER BY id DESC LIMIT 5").fetchall()
+            alerts = [{"message": row[0], "severity": row[1]} for row in alert_rows]
+
+            return {
+                "kpis": kpis,
+                "charts": {
+                    "traffic": traffic_chart,
+                    "revenue": revenue_chart,
+                    "heatmap": heatmap_chart
+                },
+                "other": {
+                    "ticket_status": ticket_status,
+                    "alerts": alerts
+                }
+            }
