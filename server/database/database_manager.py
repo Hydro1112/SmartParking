@@ -484,3 +484,34 @@ class DatabaseManager:
                     "alerts": alerts
                 }
             }
+            
+    def get_tickets_by_plate(self, plate: str) -> List[Ticket]:
+        """Lấy tất cả vé xe (cả active và closed) của một biển số xe."""
+        sql = "SELECT * FROM tickets WHERE plate = ? ORDER BY checkin_time DESC"
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, (plate,)).fetchall()
+            return [Ticket(**row) for row in rows]
+
+    def get_history_by_plate(self, plate: str) -> List[History]:
+        """Lấy toàn bộ lịch sử ra/vào của một biển số xe."""
+        sql = "SELECT * FROM history WHERE plate = ? ORDER BY timestamp DESC"
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, (plate,)).fetchall()
+            return [History(**row) for row in rows]
+
+    def get_payments_by_ticket_ids(self, ticket_ids: List[str]) -> List[Payment]:
+        """Lấy các thanh toán dựa trên một danh sách các mã vé."""
+        if not ticket_ids:
+            return []
+        placeholders = ','.join('?' for _ in ticket_ids)
+        sql = f"SELECT * FROM payments WHERE ticket_id IN ({placeholders})"
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, ticket_ids).fetchall()
+            return [Payment(**row) for row in rows]
+        
+    def get_all_payments(self) -> List[Payment]:
+        """Lấy toàn bộ lịch sử thanh toán."""
+        sql = "SELECT * FROM payments ORDER BY id DESC"
+        with self._get_connection() as conn:
+            rows = conn.execute(sql).fetchall()
+            return [Payment(**row) for row in rows]

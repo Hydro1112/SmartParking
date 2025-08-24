@@ -225,3 +225,70 @@ async def get_stats_data(start_date: str, end_date: str):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Lỗi server khi xử lý thống kê: {e}")
 
+@app.get("/api/search")
+async def search_by_plate_or_ticket(query: str):
+    """
+    Tìm kiếm toàn diện thông tin dựa trên biển số xe hoặc mã vé.
+    """
+    query = query.strip().upper()
+    
+    vehicle = None
+    tickets = []
+    history = []
+    payments = []
+
+    # Thử tìm theo mã vé trước
+    ticket_by_id = db_manager.get_ticket_by_id(query)
+    
+    if ticket_by_id:
+        plate_to_search = ticket_by_id.plate
+    else:
+        # Nếu không phải mã vé, coi nó là biển số
+        plate_to_search = query
+
+    vehicle_obj = db_manager.get_vehicle_by_plate(plate_to_search)
+    if vehicle_obj:
+        vehicle = vars(vehicle_obj)
+        
+        tickets_obj = db_manager.get_tickets_by_plate(plate_to_search)
+        tickets = [vars(t) for t in tickets_obj]
+        
+        history_obj = db_manager.get_history_by_plate(plate_to_search)
+        history = [vars(h) for h in history_obj]
+
+        ticket_ids = [t['id'] for t in tickets]
+        if ticket_ids:
+            payments_obj = db_manager.get_payments_by_ticket_ids(ticket_ids)
+            payments = [vars(p) for p in payments_obj]
+
+    return {
+        "query": query,
+        "search_plate": plate_to_search,
+        "vehicle": vehicle,
+        "tickets": tickets,
+        "history": history,
+        "payments": payments
+    }
+# Thêm vào file server/main.py, ngay phía trên endpoint /api/search
+
+@app.get("/api/data/all")
+async def get_all_data():
+    """
+    Lấy toàn bộ dữ liệu từ các bảng chính để hiển thị ban đầu.
+    """
+    try:
+        vehicles_obj = db_manager.get_all_vehicles()
+        tickets_obj = db_manager.get_all_tickets()
+        history_obj = db_manager.get_all_history()
+        payments_obj = db_manager.get_all_payments()
+
+        return {
+            "vehicles": [vars(v) for v in vehicles_obj],
+            "tickets": [vars(t) for t in tickets_obj],
+            "history": [vars(h) for h in history_obj],
+            "payments": [vars(p) for p in payments_obj],
+        }
+    except Exception as e:
+        print(f"[SERVER] ❌ Lỗi khi lấy toàn bộ dữ liệu: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Lỗi server khi lấy dữ liệu: {e}")

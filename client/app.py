@@ -77,6 +77,7 @@ class App(ParkingDashboard):
     async def start(self):
         await self.update_status_cards(); await self.populate_initial_history()
         self.thongke_page.start_initial_fetch()
+        self.tracuu_page.start_initial_fetch()
         await asyncio.gather(self.run_camera(0, "in"), self.run_camera(1, "out"))
 
     def _unwrap_history_data(self, data):
@@ -311,9 +312,40 @@ class App(ParkingDashboard):
 
 if __name__ == "__main__":
     import qasync
-    app = QApplication(sys.argv)
-    window = App()
-    window.showMaximized()
-    window.show()
-    loop = qasync.QEventLoop(app); asyncio.set_event_loop(loop)
-    with loop: loop.run_until_complete(window.start())
+    
+    async def main():
+        # Hàm main bất đồng bộ để khởi tạo và chạy ứng dụng
+        
+        def close_future(future, loop):
+            loop.call_later(10, future.cancel)
+            future.cancel()
+
+        loop = asyncio.get_event_loop()
+        future = asyncio.Future()
+
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication(sys.argv)
+        
+        # Thiết lập qasync để tích hợp với vòng lặp sự kiện của app
+        event_loop = qasync.QEventLoop(app)
+        asyncio.set_event_loop(event_loop)
+
+        app.aboutToQuit.connect(lambda: close_future(future, loop))
+
+        # Khởi tạo cửa sổ chính
+        main_window = App()
+        main_window.showMaximized()
+        main_window.show()
+
+        # Bắt đầu các tác vụ bất đồng bộ của cửa sổ
+        await main_window.start()
+
+        # Chạy vòng lặp sự kiện cho đến khi ứng dụng đóng
+        await future
+        return True
+
+    try:
+        qasync.run(main())
+    except asyncio.exceptions.CancelledError:
+        sys.exit(0)

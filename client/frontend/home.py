@@ -11,6 +11,7 @@ from PySide6.QtGui import QFont
 from frontend.soatVe import SoatVePage
 from frontend.stats import StatsPage
 from frontend.cameraCart import CameraPage
+from frontend.search import TraCuuPage
 
 class SidebarButton(QPushButton):
     def __init__(self, text, parent=None):
@@ -101,7 +102,7 @@ class ParkingDashboard(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        self.sidebar = Sidebar(["Soát vé", "Thống kê", "Giám sát", "Dữ liệu"], self.handle_sidebar_click)
+        self.sidebar = Sidebar(["Soát vé", "Thống kê", "Giám sát", "Tra cứu"], self.handle_sidebar_click)
         self.sidebar.setFixedWidth(self.SIDEBAR_EXPANDED_WIDTH)
         main_layout.addWidget(self.sidebar)
 
@@ -127,11 +128,11 @@ class ParkingDashboard(QMainWindow):
         self.soatve_page = SoatVePage()
         self.thongke_page = StatsPage()
         self.giamsat_page = CameraPage()
-        self.dulieu_page = self.create_page("Trang Dữ liệu")
+        self.tracuu_page = TraCuuPage()
         self.pages.addWidget(self.soatve_page)
         self.pages.addWidget(self.thongke_page)
         self.pages.addWidget(self.giamsat_page)
-        self.pages.addWidget(self.dulieu_page)
+        self.pages.addWidget(self.tracuu_page)
         
         header_bar = QHBoxLayout()
         header_bar.addWidget(self.toggle_button)
