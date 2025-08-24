@@ -1,4 +1,4 @@
-# FILE: frontend/home.py (FINAL VERSION)
+# FILE: frontend/soatVe.py (FINAL VERSION - UPDATED)
 # ----------------------------------------------------------------------
 import sys
 from typing import Optional
@@ -50,7 +50,6 @@ class SoatVePage(QWidget):
         self.card_in = Card(title="Xe vào", bg=C_CARD)
         self.label_in_info = QLabel("Chưa có dữ liệu"); self.label_in_info.setStyleSheet(f"color:{C_LIGHT}; font-size: 14px;"); self.card_in.v.addWidget(self.label_in_info)
         self.label_in_plate_img = QLabel(); self.label_in_plate_img.setAlignment(Qt.AlignCenter); self.label_in_plate_img.setMinimumHeight(120)
-        # <<< SỬA LỖI 1: Cấu hình QLabel tự động scale ảnh
         self.label_in_plate_img.setScaledContents(True)
         self.card_in.v.addWidget(self.label_in_plate_img)
         self.label_in_plate_text = QLabel("---"); self.label_in_plate_text.setAlignment(Qt.AlignCenter); self.label_in_plate_text.setFont(QFont("Inter, Arial", 18, QFont.Bold)); self.label_in_plate_text.setStyleSheet("color:white;"); self.card_in.v.addWidget(self.label_in_plate_text); self.card_in.v.addStretch()
@@ -59,7 +58,6 @@ class SoatVePage(QWidget):
         self.card_out = Card(title="Xe ra", bg=C_CARD)
         self.label_out_info = QLabel("Chưa có dữ liệu"); self.label_out_info.setStyleSheet(f"color:{C_LIGHT}; font-size: 14px;"); self.card_out.v.addWidget(self.label_out_info)
         self.label_out_plate_img = QLabel(); self.label_out_plate_img.setAlignment(Qt.AlignCenter); self.label_out_plate_img.setMinimumHeight(120)
-        # <<< SỬA LỖI 2: Cấu hình QLabel tự động scale ảnh
         self.label_out_plate_img.setScaledContents(True)
         self.card_out.v.addWidget(self.label_out_plate_img)
         self.label_out_plate_text = QLabel("---"); self.label_out_plate_text.setAlignment(Qt.AlignCenter); self.label_out_plate_text.setFont(QFont("Inter, Arial", 18, QFont.Bold)); self.label_out_plate_text.setStyleSheet("color:white;"); self.card_out.v.addWidget(self.label_out_plate_text); self.card_out.v.addStretch()
@@ -67,15 +65,20 @@ class SoatVePage(QWidget):
         # Camera và Bảng
         self.mid_cam_in  = VideoCard(title="Camera Vào", bg=C_DARK); self.mid_cam_out = VideoCard(title="Camera Ra", bg=C_DARK)
         grid.addWidget(self.card_in, 0, 0, 2, 1); grid.addWidget(self.mid_cam_in,  0, 1, 1, 1); grid.addWidget(self.mid_cam_out, 0, 2, 1, 1); grid.addWidget(self.card_out, 0, 3, 2, 1)
-        self.recent = Card(title="Lịch sử gần đây", bg=C_HILITE); self.table_recent = QTableWidget(0, 5); self.table_recent.setHorizontalHeaderLabels(["Biển số", "Loại xe", "Loại vé", "Thời gian", "Trạng thái"]); self.table_recent.verticalHeader().setVisible(False); self.table_recent.setEditTriggers(QAbstractItemView.NoEditTriggers); self.table_recent.setSelectionMode(QAbstractItemView.NoSelection); self.table_recent.setStyleSheet(f'QHeaderView::section{{background-color:{C_DARK};color:white;padding:6px;border:none;font-weight:bold;}} QTableWidget{{background-color:transparent;color:white;gridline-color:{C_LIGHT}30;}}'); self.table_recent.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch); self.recent.v.addWidget(self.table_recent); grid.addWidget(self.recent, 1, 1, 1, 2); root_layout.addWidget(main, 1)
+        self.recent = Card(title="Lịch sử gần đây", bg=C_HILITE)
+        
+        # ✨ THAY ĐỔI 1: Tăng số cột từ 5 lên 6
+        self.table_recent = QTableWidget(0, 6)
+        # ✨ THAY ĐỔI 2: Thêm "Mã vé" vào header
+        self.table_recent.setHorizontalHeaderLabels(["Biển số", "Mã vé", "Loại xe", "Loại vé", "Thời gian", "Trạng thái"])
+        
+        self.table_recent.verticalHeader().setVisible(False); self.table_recent.setEditTriggers(QAbstractItemView.NoEditTriggers); self.table_recent.setSelectionMode(QAbstractItemView.NoSelection); self.table_recent.setStyleSheet(f'QHeaderView::section{{background-color:{C_DARK};color:white;padding:6px;border:none;font-weight:bold;}} QTableWidget{{background-color:transparent;color:white;gridline-color:{C_LIGHT}30;}}'); self.table_recent.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch); self.recent.v.addWidget(self.table_recent); grid.addWidget(self.recent, 1, 1, 1, 2); root_layout.addWidget(main, 1)
 
     def update_cards(self, latest_in: Optional[dict], latest_out: Optional[dict]):
-        """Cập nhật thông tin cho cả hai card Xe vào và Xe ra."""
         self._update_single_card("in", latest_in)
         self._update_single_card("out", latest_out)
 
     def _update_single_card(self, direction: str, data: Optional[dict]):
-        """Hàm nội bộ để cập nhật một card cụ thể."""
         if direction == "in":
             label_info, label_plate, label_img = self.label_in_info, self.label_in_plate_text, self.label_in_plate_img
         else:
@@ -85,7 +88,9 @@ class SoatVePage(QWidget):
             label_info.setText("Chưa có dữ liệu"); label_plate.setText("---"); label_img.clear(); return
 
         plate = data.get("plate", "---"); vtype = data.get("vehicle_type", "---").capitalize(); ttype = data.get("ticket_type", "---").capitalize(); time  = data.get("time", "---")
-        info_text = f"<b style='color:#ffffff;'>Loại xe:</b> {vtype}<br><b style='color:#ffffff;'>Loại vé:</b> {ttype}<br><b style='color:#ffffff;'>Thời gian:</b> {time}"
+        # ✨ THAY ĐỔI 3: Hiển thị mã vé trên card
+        ticket_id = data.get("ticket_id", "---")
+        info_text = f"<b style='color:#ffffff;'>Mã vé:</b> {ticket_id}<br><b style='color:#ffffff;'>Loại xe:</b> {vtype}<br><b style='color:#ffffff;'>Loại vé:</b> {ttype}<br><b style='color:#ffffff;'>Thời gian:</b> {time}"
         label_info.setText(info_text); label_plate.setText(plate)
 
         b64img = data.get("license_plate_image")
@@ -94,8 +99,6 @@ class SoatVePage(QWidget):
                 img_bytes = base64.b64decode(b64img)
                 pixmap = QPixmap()
                 pixmap.loadFromData(img_bytes)
-                # <<< SỬA LỖI 3: Bỏ .scaled() và setPixmap trực tiếp.
-                # QLabel sẽ tự động co giãn ảnh nhờ setScaledContents(True)
                 label_img.setPixmap(pixmap)
             except Exception as e:
                 print(f"[UI] Lỗi decode ảnh cho biển số {plate}:", e); label_img.clear()
@@ -103,23 +106,32 @@ class SoatVePage(QWidget):
             label_img.clear()
 
     def add_to_history(self, data: dict):
-        """Thêm một dòng sự kiện mới vào bảng lịch sử."""
         if not data: return
-        plate = data.get("plate", "---"); vtype = data.get("vehicle_type", "---").capitalize(); ttype = data.get("ticket_type", "---").capitalize(); time = data.get("time", "---"); status = data.get("event_type", "---")
+        plate = data.get("plate", "---")
+        # ✨ THAY ĐỔI 4: Lấy thêm ticket_id
+        ticket_id = data.get("ticket_id", "---")
+        vtype = data.get("vehicle_type", "---").capitalize()
+        ttype = data.get("ticket_type", "---").capitalize()
+        time = data.get("time", "---")
+        status = data.get("event_type", "---")
         display_status = "Vào" if status == "in" else "Ra"
         
         if self.table_recent.rowCount() > 0:
-            if (self.table_recent.item(0, 0).text() == plate and self.table_recent.item(0, 4).text() == display_status):
+            if (self.table_recent.item(0, 0).text() == plate and self.table_recent.item(0, 5).text() == display_status): # Cột trạng thái giờ là 5
                 return
 
         self.table_recent.insertRow(0)
-        items = [QTableWidgetItem(plate), QTableWidgetItem(vtype), QTableWidgetItem(ttype), QTableWidgetItem(time), QTableWidgetItem(display_status)]
+        # ✨ THAY ĐỔI 5: Thêm ticket_id vào danh sách item
+        items = [
+            QTableWidgetItem(plate), QTableWidgetItem(ticket_id), QTableWidgetItem(vtype),
+            QTableWidgetItem(ttype), QTableWidgetItem(time), QTableWidgetItem(display_status)
+        ]
         
         for i, item in enumerate(items):
             item.setTextAlignment(Qt.AlignCenter)
             self.table_recent.setItem(0, i, item)
 
-        status_item = self.table_recent.item(0, 4)
+        status_item = self.table_recent.item(0, 5) # Cột trạng thái giờ là 5
         if status == "in": status_item.setBackground(QColor("#1b98e0"))
         else: status_item.setBackground(QColor("#e01b6a"))
 
@@ -128,12 +140,5 @@ class SoatVePage(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     win = SoatVePage()
-    # Thêm dữ liệu giả để test giao diện
-    # win.update_cards(
-    #     {"plate": "37A-12345", "vehicle_type": "Xe máy", "ticket_type": "Giờ", "time": "08:00 20/08/2025"},
-    #     {"plate": "29B-67890", "vehicle_type": "Ô tô", "ticket_type": "Tháng", "time": "08:05 20/08/2025"}
-    # )
-    # win.add_to_history({"plate": "37A-12345", "vehicle_type": "Xe máy", "ticket_type": "Giờ", "time": "08:00 20/08/2025", "event_type": "in"})
-    # win.add_to_history({"plate": "29B-67890", "vehicle_type": "Ô tô", "ticket_type": "Tháng", "time": "08:05 20/08/2025", "event_type": "in"})
     win.show()
     sys.exit(app.exec())

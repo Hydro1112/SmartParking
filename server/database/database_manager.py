@@ -41,7 +41,7 @@ class Ticket:
 
 class History:
     """Đại diện cho một bản ghi lịch sử ra/vào trong bảng `history`."""
-    def __init__(self, vehicle_id: str, plate: str, gate: str, event_type: str, id: Optional[int] = None, camera_id: Optional[int] = None, ticket_id: Optional[str] = None, image_url: Optional[str] = None):
+    def __init__(self, vehicle_id: str, plate: str, gate: str, event_type: str, timestamp: str, id: Optional[int] = None, camera_id: Optional[int] = None, ticket_id: Optional[str] = None):
         self.id = id
         self.vehicle_id = vehicle_id
         self.plate = plate
@@ -49,7 +49,7 @@ class History:
         self.camera_id = camera_id
         self.event_type = event_type
         self.ticket_id = ticket_id
-        self.image_url = image_url
+        self.timestamp = timestamp
 
 class Payment:
     """Đại diện cho một giao dịch thanh toán trong bảng `payments`."""
@@ -232,11 +232,11 @@ class DatabaseManager:
     def create_history_event(self, event: History) -> int:
         """Ghi lại một sự kiện ra/vào."""
         sql = """
-            INSERT INTO history (vehicle_id, plate, gate, camera_id, event_type, ticket_id, image_url)
+            INSERT INTO history (vehicle_id, plate, gate, camera_id, event_type, ticket_id, timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """
         with self._get_connection() as conn:
-            cursor = conn.execute(sql, (event.vehicle_id, event.plate, event.gate, event.camera_id, event.event_type, event.ticket_id, event.image_url))
+            cursor = conn.execute(sql, (event.vehicle_id, event.plate, event.gate, event.camera_id, event.event_type, event.ticket_id, event.timestamp))
             conn.commit()
             return cursor.lastrowid
 

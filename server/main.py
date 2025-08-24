@@ -1,4 +1,4 @@
-# FILE: main.py (FINAL VERSION - CORRECTED MONTHLY TICKET LOGIC)
+# FILE: main.py (FINAL VERSION - CORRECTED MONTHLY TICKET LOGIC & PERFORMANCE FIX & TICKET VALIDATION)
 # ----------------------------------------------------------------------
 import cv2
 import numpy as np
@@ -11,11 +11,13 @@ from typing import List, Optional
 import torch
 import traceback
 import sqlite3
+import asyncio
 
 from server.database.database import init_db
 from server.utils.fasterRcnnCamera import PlateDetector, _init_models, CAM_W, CAM_H
 from server.utils.readLicensePlate import get_ocr
-from server.database.database_manager import DatabaseManager, Vehicle, Ticket, History, Payment
+# ✨ THÊM IMPORT Alert
+from server.database.database_manager import DatabaseManager, Vehicle, Ticket, History, Payment, Alert
 from server.utils.pricing import calculate_price, MONTHLY_RATE
 
 # ==================== App init ====================
@@ -58,11 +60,14 @@ async def camera_ws(ws: WebSocket, cam_id: int):
     await ws.accept(); print(f"[SERVER] ✅ Client đã kết nối vào cam {cam_id}")
     is_out_gate = (cam_id == 1)
     detector = PlateDetector(db_manager, event_label="out" if is_out_gate else "in")
+    loop = asyncio.get_running_loop()
     while True:
         try:
             frame_bytes = await ws.receive_bytes(); arr = np.frombuffer(frame_bytes, dtype=np.uint8); frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if frame is None: continue
-            meta = detector.process(frame)
+            
+            meta = await loop.run_in_executor(None, detector.process, frame)
+
             if is_out_gate and meta.get("plates"):
                 for vehicle_data in meta["plates"]:
                     plate = vehicle_data.get("plate")
@@ -94,8 +99,8 @@ async def log_monthly_entry(data: PlateRequest):
     monthly_ticket = db_manager.get_active_monthly_ticket_by_plate(data.plate)
     if not monthly_ticket:
         raise HTTPException(status_code=404, detail=f"Không tìm thấy vé tháng đang hoạt động cho biển số {data.plate}")
-    
-    history_in = History(vehicle_id=monthly_ticket.vehicle_id, plate=monthly_ticket.plate, gate="Gate Cam 0", camera_id=0, event_type="in", ticket_id=monthly_ticket.id)
+    now_ts = datetime.now().isoformat()
+    history_in = History(vehicle_id=monthly_ticket.vehicle_id, plate=monthly_ticket.plate, gate="Gate Cam 0", camera_id=0, event_type="in", ticket_id=monthly_ticket.id, timestamp=now_ts)
     db_manager.create_history_event(history_in)
     print(f"[SERVER] ✅ Đã ghi nhận lịch sử vào cho xe vé tháng {data.plate}")
     return {"status": "success", "detail": f"Đã ghi nhận xe {data.plate} vào."}
@@ -121,14 +126,16 @@ async def choose_ticket(data: TicketChoice):
             db_manager.create_payment(payment)
             print(f"[SERVER] 💳 Đã ghi nhận thanh toán {MONTHLY_RATE}đ cho vé tháng {created_id}")
 
-        history_in = History(vehicle_id=vehicle_id, plate=data.plate, gate="Gate Cam 0", camera_id=0, event_type="in", ticket_id=created_id)
+        history_in = History(vehicle_id=vehicle_id, plate=data.plate, gate="Gate Cam 0", camera_id=0, event_type="in", ticket_id=created_id,timestamp=now_str)
         db_manager.create_history_event(history_in); print(f"[SERVER] ✅ Đã tạo vé {created_id} và lịch sử vào cho xe {data.plate}")
         return {"status": "success", "ticket_id": created_id}
     except Exception as e:
         print(f"[SERVER] ❌ Lỗi khi tạo vé: {e}"); traceback.print_exc(); raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
+# ✨ THAY ĐỔI 10: Cập nhật model để nhận ticket_id
 class CheckoutRequest(BaseModel):
     plate: str
+    ticket_id: str
 
 @app.post("/api/ticket/checkout")
 async def confirm_checkout(data: CheckoutRequest):
@@ -137,25 +144,27 @@ async def confirm_checkout(data: CheckoutRequest):
         if not active_ticket_obj:
             raise HTTPException(status_code=404, detail=f"Không tìm thấy vé đang hoạt động cho biển số {data.plate}")
 
-        # ✨ SỬA LỖI LOGIC VÉ THÁNG: Phân luồng xử lý tại đây
-        # --------------------------------------------------------------------
-        # Trường hợp 1: Đây là xe vé tháng
+        # ✨ THAY ĐỔI 11: Logic xác thực mã vé
+        if active_ticket_obj.id != data.ticket_id:
+            # Nếu mã vé không khớp
+            print(f"[SERVER] 🚨 CẢNH BÁO: Sai mã vé cho xe {data.plate}. Người dùng nhập: {data.ticket_id}, Đúng là: {active_ticket_obj.id}")
+            # Tạo một bản ghi cảnh báo trong CSDL
+            alert_msg = f"Sai mã vé cho xe {data.plate}. Người dùng đã nhập '{data.ticket_id}'."
+            new_alert = Alert(alert_type="wrong_ticket", message=alert_msg, severity="warning")
+            db_manager.create_alert(new_alert)
+            # Trả về lỗi cho client
+            raise HTTPException(status_code=400, detail="Sai mã vé, vui lòng kiểm tra lại.")
+        now_ts = datetime.now().isoformat()
+        # Nếu mã vé ĐÚNG, tiếp tục xử lý như cũ
         if active_ticket_obj.ticket_type == 'monthly':
-            # Chỉ cần ghi nhận lịch sử ra, KHÔNG thay đổi status của vé tháng
             history_out = History(
-                vehicle_id=active_ticket_obj.vehicle_id,
-                plate=data.plate,
-                gate="Gate Cam 1",
-                camera_id=1,
-                event_type="out",
-                ticket_id=active_ticket_obj.id
+                vehicle_id=active_ticket_obj.vehicle_id, plate=data.plate, timestamp=now_ts,
+                gate="Gate Cam 1", camera_id=1, event_type="out", ticket_id=active_ticket_obj.id
             )
             db_manager.create_history_event(history_out)
             print(f"[SERVER] 📝 Đã ghi nhận lịch sử ra cho xe vé tháng {data.plate}. Vé tháng vẫn active.")
             return {"status": "success", "detail": f"Xe vé tháng {data.plate} đã được xác nhận ra."}
         
-        # --------------------------------------------------------------------
-        # Trường hợp 2: Đây là xe vé lượt (hourly, daily, etc.)
         else:
             now = datetime.now()
             final_cost = calculate_price(active_ticket_obj, now)
@@ -164,35 +173,32 @@ async def confirm_checkout(data: CheckoutRequest):
                 db_manager.create_payment(payment)
                 print(f"[SERVER] 💳 Đã ghi nhận thanh toán {final_cost}đ cho vé lượt {active_ticket_obj.id}")
 
-            # Đóng vé lượt này lại
             active_ticket = vars(active_ticket_obj)
             checkin_time = datetime.fromisoformat(active_ticket['checkin_time'])
             active_ticket['duration'] = int((now - checkin_time).total_seconds() / 60)
             active_ticket['checkout_time'] = now.isoformat()
-            active_ticket['status'] = 'closed' # << Quan trọng: Chỉ đóng vé lượt
+            active_ticket['status'] = 'closed'
             
             ticket_to_update = Ticket(**active_ticket)
             db_manager.update_ticket(ticket_to_update)
             
-            # Ghi lịch sử ra
             history_out = History(
-                vehicle_id=active_ticket['vehicle_id'],
-                plate=data.plate,
-                gate="Gate Cam 1",
-                camera_id=1,
-                event_type="out",
-                ticket_id=active_ticket['id']
+                vehicle_id=active_ticket['vehicle_id'], plate=data.plate,
+                gate="Gate Cam 1", camera_id=1, event_type="out", ticket_id=active_ticket['id'], timestamp=now_ts
             )
             db_manager.create_history_event(history_out)
             print(f"[SERVER] 📝 Đã đóng vé lượt và ghi lịch sử ra cho xe {data.plate}")
             
             return {"status": "success", "detail": f"Xe {data.plate} đã được xác nhận ra."}
-        # --------------------------------------------------------------------
 
+    except HTTPException as http_exc:
+        # Re-raise HTTPException để FastAPI xử lý
+        raise http_exc
     except Exception as e:
         print(f"[SERVER] ❌ Lỗi khi xác nhận xe ra: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
+
 
 @app.get("/api/history/latest")
 async def get_latest_history():

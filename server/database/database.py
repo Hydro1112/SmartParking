@@ -64,7 +64,7 @@ def init_db():
             camera_id INTEGER,
             event_type TEXT NOT NULL,
             ticket_id TEXT,
-            image_url TEXT,
+            timestamp TEXT NOT NULL,
             FOREIGN KEY(vehicle_id) REFERENCES vehicles(id),
             FOREIGN KEY(ticket_id) REFERENCES tickets(id),
             FOREIGN KEY(camera_id) REFERENCES cameras(id)
