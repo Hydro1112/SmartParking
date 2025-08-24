@@ -342,4 +342,23 @@ class DatabaseManager:
         with self._get_connection() as conn:
             row = conn.execute(sql, (event_type,)).fetchone()
             return dict(row) if row else None
-    
+        
+    def get_recent_history(self, limit: int = 10) -> list[dict]:
+        """Lấy danh sách các sự kiện lịch sử gần đây nhất."""
+        
+        # <<< SỬA LỖI TẠI ĐÂY: Sắp xếp theo 'id' thay vì 'timestamp'
+        sql = """
+            SELECT * FROM history
+            ORDER BY id DESC 
+            LIMIT ?
+        """
+        
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, (limit,))
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            print(f"Lỗi database khi lấy lịch sử gần đây: {e}")
+            return []

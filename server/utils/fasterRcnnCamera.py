@@ -3,10 +3,11 @@ import torch
 import numpy as np
 from collections import deque, Counter
 from torchvision.transforms import functional as F
-from torchvision.models.detection import fasterrcnn_resnet50_fpn
+from torchvision.models.detection import fasterrcnn_resnet50_fpn, fasterrcnn_mobilenet_v3_large_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from ultralytics import YOLO
 import base64
+import uuid  # ✨ THÊM IMPORT
 from server.utils.readLicensePlate import readLicensePlate
 from server.sort.sort import Sort
 
@@ -14,7 +15,7 @@ from server.sort.sort import Sort
 from server.database.database_manager import DatabaseManager, Vehicle
 
 # ---------------------- Config ----------------------
-CAM_W, CAM_H = 480, 480
+CAM_W, CAM_H = 640, 640
 YOLO_CONF = 0.20
 PLATE_SCORE_THR = 0.9
 VEHICLE_CLASSES = [2, 3]  # 2: car, 3: motorbike
@@ -34,25 +35,49 @@ def _tensor_from_bgr(img_bgr):
 
 def _init_models():
     """Tải YOLO + Faster R-CNN một lần."""
-    # Faster R-CNN (2 lớp: background + plate)
-    model_frcnn = fasterrcnn_resnet50_fpn(weights=None)
-    in_features = model_frcnn.roi_heads.box_predictor.cls_score.in_features
-    model_frcnn.roi_heads.box_predictor = FastRCNNPredictor(in_features, 2)
-    model_frcnn.load_state_dict(torch.load("server/models/faster_rcnn.pth", map_location=device))
-    model_frcnn.to(device).eval()
+    try:
+        # Xác định thiết bị (device)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[INIT_MODELS] Thiết bị được sử dụng: {device}")
 
-    # YOLO
-    model_yolo = YOLO("server/models/yolov8n.pt")
-    YOLO_HALF = False
-    if device.type == "cuda":
-        try:
-            model_yolo.model.half()
-            YOLO_HALF = True
-        except Exception:
-            pass
+        # Faster R-CNN (2 lớp: background + plate)
+        model_frcnn = fasterrcnn_mobilenet_v3_large_fpn(weights=None)
+        in_features = model_frcnn.roi_heads.box_predictor.cls_score.in_features
+        model_frcnn.roi_heads.box_predictor = FastRCNNPredictor(in_features, 2)
+        model_frcnn.load_state_dict(
+            torch.load(
+                "server/models/faster_rcnn_mobilenetv3_stable_v4.pth",
+                map_location=device,
+                weights_only=True
+            )
+        )
+        model_frcnn.to(device).eval()
+        print("[INIT_MODELS] Đã tải mô hình Faster R-CNN thành công.")
 
-    return model_frcnn, model_yolo, YOLO_HALF
+        # YOLO
+        model_yolo = YOLO("server/models/yolov8n.pt")
+        model_yolo.to(device)
+        print("[INIT_MODELS] Đã tải mô hình YOLO thành công.")
 
+        # Bước 3: Bây giờ mới chuyển sang half-precision nếu dùng CUDA
+        YOLO_HALF = False
+        if device.type == "cuda":
+            try:
+                YOLO_HALF = True
+                print("[INIT_MODELS] Mô hình YOLO sẽ được chạy ở half-precision (float16).")
+            except Exception as e:
+                print(f"[INIT_MODELS] Không thể chuyển YOLO sang half-precision: {e}")
+                YOLO_HALF = False
+        else:
+            print("[INIT_MODELS] Chạy YOLO ở chế độ float32 (CPU).")
+
+        return model_frcnn, model_yolo, YOLO_HALF
+
+    except Exception as e:
+        print(f"[INIT_MODELS] Lỗi khi tải mô hình: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 class PlateDetector:
     """
@@ -61,20 +86,20 @@ class PlateDetector:
     """
     _shared_models = None  # cache models giữa nhiều instance
 
-    # Thay đổi __init__: Thêm db_manager làm tham số
     def __init__(self, db_manager: DatabaseManager, event_label=None):
         if PlateDetector._shared_models is None:
             PlateDetector._shared_models = _init_models()
         self.model_frcnn, self.model_yolo, self.YOLO_HALF = PlateDetector._shared_models
 
         self.tracker = Sort()
-        self.db_manager = db_manager  # Lưu lại instance của manager
+        self.db_manager = db_manager
 
         # Lịch sử bỏ phiếu theo từng xe: car_id -> deque([...])
         self.car_plate_history = {}  # {car_id: deque([...], maxlen=HISTORY_LEN)}
 
-        # Biển số đã log theo từng xe: car_id -> (text, conf)
-        self.logged_cars = {}
+        # ✨ SỬA LỖI: Thêm tracking để tránh duplicate vehicles
+        self.processed_plates = set()  # Lưu các biển số đã được xử lý
+        self.car_id_to_vehicle_id = {}  # Map car_id -> vehicle_id trong DB
 
         # Thêm event_label (in/out)
         self.event_label = event_label
@@ -147,40 +172,41 @@ class PlateDetector:
                 votes = Counter(self.car_plate_history[car_id])
                 best_text, best_count = votes.most_common(1)[0]
 
+                # Trong class PlateDetector, phương thức process:
+
+                # ... (phần code detect giữ nguyên) ...
+
+                # Bỏ phiếu
+                if car_id not in self.car_plate_history:
+                    self.car_plate_history[car_id] = deque(maxlen=HISTORY_LEN)
+                self.car_plate_history[car_id].append(plate_text)
+                votes = Counter(self.car_plate_history[car_id])
+                best_text, best_count = votes.most_common(1)[0]
+
                 # Chỉ add nếu đã vote đủ
                 if best_count >= MIN_VOTES:
                     plate_text = best_text
                     vehicle_type = car_info[idx][4] if idx < len(car_info) else "unknown"
 
-                    # Thay thế logic DB cũ bằng DatabaseManager
                     # =========================================================
-                    # 1. Kiểm tra xe đã có trong DB chưa bằng biển số
-                    existing_vehicle = self.db_manager.get_vehicle_by_plate(plate_text)
+                    # ✨✨✨ XÓA TOÀN BỘ LOGIC GHI DATABASE Ở ĐÂY ✨✨✨
+                    # 1. Bỏ kiểm tra biển số đã xử lý chưa (processed_plates)
+                    # 2. Bỏ kiểm tra xe đã có trong DB chưa (get_vehicle_by_plate)
+                    # 3. Bỏ hoàn toàn khối "if existing_vehicle is None:" và việc tạo vehicle mới.
+                    # =========================================================
 
-                    # 2. Nếu xe chưa có, tạo bản ghi mới
-                    if existing_vehicle is None:
-                        # Convert ảnh crop sang base64
-                        _, buf = cv2.imencode(".jpg", vehicle_crop)
-                        img_b64 = base64.b64encode(buf).decode("utf-8")
-                        
-                        # Tạo đối tượng Vehicle
-                        new_vehicle = Vehicle(
-                            id=str(car_id),
-                            plate=plate_text,
-                            vehicle_type=vehicle_type,
-                            license_plate_image=img_b64
-                        )
-                        # Dùng manager để tạo
-                        self.db_manager.create_vehicle(new_vehicle)
-                        print(f"[AI] 🆕 Xe mới được phát hiện và lưu vào DB: {plate_text}")
-                    # =========================================================
+                    # ✨ THAY ĐỔI: Gửi kèm ảnh xe đã crop về client
+                    _, buf = cv2.imencode(".jpg", vehicle_crop)
+                    img_b64 = base64.b64encode(buf).decode("utf-8")
 
                     metadata["plates"].append({
                         "car_id": int(car_id),
                         "plate": plate_text,
-                        "vehicle_type": vehicle_type
+                        "vehicle_type": vehicle_type,
+                        "vehicle_image_b64": img_b64  # ✨ Thêm ảnh vào metadata
                     })
 
+                # ... (phần còn lại của hàm giữ nguyên) ...
 
         # ---------------- Gửi kèm ảnh gốc ----------------
         _, buf = cv2.imencode(".jpg", frame)
@@ -191,3 +217,13 @@ class PlateDetector:
         
         return metadata
 
+    # ✨ THÊM: Method để reset processed plates khi cần
+    def reset_processed_plates(self):
+        """Reset danh sách các biển số đã xử lý - có thể gọi khi cần thiết"""
+        self.processed_plates.clear()
+        self.car_id_to_vehicle_id.clear()
+        print("[AI] 🔄 Reset processed plates và car_id mapping")
+
+    def get_vehicle_id_by_car_id(self, car_id):
+        """Lấy vehicle_id trong DB từ car_id của tracker"""
+        return self.car_id_to_vehicle_id.get(car_id)

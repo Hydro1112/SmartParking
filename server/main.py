@@ -1,3 +1,5 @@
+# FILE: main.py (FINAL VERSION)
+# ----------------------------------------------------------------------
 import cv2
 import numpy as np
 import uuid
@@ -6,10 +8,14 @@ from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
+import torch
+import traceback
+import sqlite3
 
-from server.database.database import init_db, seed_data
-from server.utils.fasterRcnnCamera import PlateDetector
-from server.database.database_manager import DatabaseManager, Ticket, History
+from server.database.database import init_db
+from server.utils.fasterRcnnCamera import PlateDetector, _init_models, CAM_W, CAM_H
+from server.utils.readLicensePlate import get_ocr
+from server.database.database_manager import DatabaseManager, Vehicle, Ticket, History
 
 # ==================== App init ====================
 app = FastAPI(title="SmartParking Server", version="1.0.0")
@@ -17,123 +23,111 @@ db_manager = DatabaseManager("server/database/parking.db")
 init_db()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
+    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
+
+# ==================== Helper Function (Tái sử dụng) ====================
+def _enrich_history(history_event: dict | None):
+    """Lấy thông tin vehicle và ticket để bổ sung cho một sự kiện lịch sử."""
+    if not history_event: return None
+    plate = history_event.get("plate")
+    vehicle_obj = db_manager.get_vehicle_by_plate(plate) if plate else None
+    ticket_obj = db_manager.get_ticket_by_id(history_event.get("ticket_id")) if history_event.get("ticket_id") else None
+    
+    vehicle = vars(vehicle_obj) if vehicle_obj else None
+    ticket = vars(ticket_obj) if ticket_obj else None
+    
+    return {"history": history_event, "vehicle": vehicle, "ticket": ticket}
+
+# ==================== Pre-load AI Models ====================
+@app.on_event("startup")
+async def startup_event():
+    print("[SERVER] 🚀 Đang khởi động, bắt đầu tải trước các mô hình AI...")
+    try:
+        PlateDetector._shared_models = _init_models()
+        get_ocr()
+        print("[SERVER] ✅ Tải file mô hình thành công. Bắt đầu làm nóng (warm-up)...")
+        dummy_image = np.zeros((CAM_H, CAM_W, 3), dtype=np.uint8)
+        yolo_model = PlateDetector._shared_models[1]
+        with torch.no_grad():
+            yolo_model.predict(dummy_image, verbose=False, imgsz=(CAM_H, CAM_W))
+        print("[SERVER] 🔥 Tải và khởi động mô hình AI hoàn chỉnh! Máy chủ đã sẵn sàng.")
+    except Exception as e:
+        print(f"[SERVER] ❌ Lỗi nghiêm trọng khi tải hoặc làm nóng mô hình: {e}"); traceback.print_exc(); raise
 
 # ==================== WebSocket camera ====================
 @app.websocket("/ws/camera/{cam_id}")
 async def camera_ws(ws: WebSocket, cam_id: int):
-    await ws.accept()
-    print(f"[SERVER] ✅ Client connected on cam {cam_id}")
-
+    await ws.accept(); print(f"[SERVER] ✅ Client đã kết nối vào cam {cam_id}")
     is_out_gate = (cam_id == 1)
     detector = PlateDetector(db_manager, event_label="out" if is_out_gate else "in")
-
     while True:
         try:
-            frame_bytes = await ws.receive_bytes()
-            arr = np.frombuffer(frame_bytes, dtype=np.uint8)
-            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-
+            frame_bytes = await ws.receive_bytes(); arr = np.frombuffer(frame_bytes, dtype=np.uint8); frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if frame is None: continue
-
             meta = detector.process(frame)
-            await ws.send_json(meta)
-
             if is_out_gate and meta.get("plates"):
                 for vehicle_data in meta["plates"]:
                     plate = vehicle_data.get("plate")
                     if not plate: continue
-                    
                     active_ticket = db_manager.get_active_ticket_by_plate(plate)
-                    
                     if active_ticket:
-                        print(f"[SERVER] 🔎 Xe ra: {plate}, tìm thấy vé active: {active_ticket.id}")
-                        now = datetime.now()
-                        checkin_time = datetime.strptime(active_ticket.checkin_time, "%Y-%m-%d %H:%M:%S")
-                        duration_minutes = int((now - checkin_time).total_seconds() / 60)
-                        
-                        active_ticket.checkout_time = now.strftime("%Y-%m-%d %H:%M:%S")
-                        active_ticket.status = "closed"
-                        active_ticket.duration = duration_minutes
-                        
-                        db_manager.update_ticket(active_ticket)
-                        
-                        history_out = History(
-                            vehicle_id=active_ticket.vehicle_id, plate=plate,
-                            gate=f"Gate Cam {cam_id}", camera_id=cam_id,
-                            event_type="out", ticket_id=active_ticket.id
-                        )
-                        db_manager.create_history_event(history_out)
-                        print(f"[SERVER] 📝 Cập nhật vé và ghi lịch sử ra cho xe {plate}")
-
+                        print(f"[SERVER] 🔎 Xe ra: {plate}, tìm thấy vé active. Gửi yêu cầu xác nhận về client.")
+                        vehicle_info_obj = db_manager.get_vehicle_by_plate(plate)
+                        checkout_data = {"event": "checkout_request", "ticket_data": {**vars(active_ticket), "vehicle": vars(vehicle_info_obj) if vehicle_info_obj else None}}
+                        await ws.send_json(checkout_data); break 
+            await ws.send_json(meta)
         except Exception as e:
-            print(f"[SERVER] ⚠️ Error cam {cam_id}: {e}")
-            break
+            print(f"[SERVER] ⚠️ Lỗi trên cam {cam_id}: {e}"); traceback.print_exc(); break
 
 # ==================== REST API ====================
 class TicketChoice(BaseModel):
-    car_id: str; plate: str; vehicle_type: str | None = None; ticket_type: str
+    car_id: str; plate: str; vehicle_type: str | None = None; ticket_type: str; vehicle_image_b64: str
 
 @app.post("/api/ticket/choose")
 async def choose_ticket(data: TicketChoice):
     try:
-        ticket_id = f"H{str(uuid.uuid4().hex[:5]).upper()}"
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        new_ticket = Ticket(
-            id=ticket_id, vehicle_id=data.car_id, plate=data.plate,
-            ticket_type=data.ticket_type, checkin_time=now_str, status="active"
-        )
+        existing_vehicle_obj = db_manager.get_vehicle_by_plate(data.plate)
+        if existing_vehicle_obj:
+            vehicle_id = vars(existing_vehicle_obj).get('id')
+        else:
+            new_vehicle = Vehicle(id=str(uuid.uuid4()), plate=data.plate, vehicle_type=data.vehicle_type, license_plate_image=data.vehicle_image_b64)
+            vehicle_id = db_manager.create_vehicle(new_vehicle)
+        
+        ticket_id = f"H{str(uuid.uuid4().hex[:5]).upper()}"; now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        new_ticket = Ticket(id=ticket_id, vehicle_id=vehicle_id, plate=data.plate, ticket_type=data.ticket_type, checkin_time=now_str, status="active")
         created_id = db_manager.create_ticket(new_ticket)
-        print(f"[SERVER] ✅ Created ticket {created_id} for plate {data.plate}")
-
-        history_in = History(
-            vehicle_id=data.car_id, plate=data.plate, gate="Gate Cam 0",
-            camera_id=0, event_type="in", ticket_id=created_id
-        )
-        db_manager.create_history_event(history_in)
-        print(f"[SERVER] 📝 Ghi lịch sử vào cho xe {data.plate}")
-
+        history_in = History(vehicle_id=vehicle_id, plate=data.plate, gate="Gate Cam 0", camera_id=0, event_type="in", ticket_id=created_id)
+        db_manager.create_history_event(history_in); print(f"[SERVER] ✅ Đã tạo vé {created_id} và lịch sử vào cho xe {data.plate}")
         return {"status": "success", "ticket_id": created_id}
     except Exception as e:
-        print(f"[SERVER] ❌ DB insert error: {e}")
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        print(f"[SERVER] ❌ Lỗi khi tạo vé: {e}"); traceback.print_exc(); raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
-# ✨ API MỚI ĐỂ LẤY THÔNG TIN HIỂN THỊ LÊN GIAO DIỆN ✨
+class CheckoutRequest(BaseModel):
+    plate: str
+
+@app.post("/api/ticket/checkout")
+async def confirm_checkout(data: CheckoutRequest):
+    try:
+        active_ticket_obj = db_manager.get_active_ticket_by_plate(data.plate)
+        if not active_ticket_obj: raise HTTPException(status_code=404, detail=f"Không tìm thấy vé đang hoạt động cho biển số {data.plate}")
+        active_ticket = vars(active_ticket_obj); now = datetime.now(); checkin_time = datetime.strptime(active_ticket['checkin_time'], "%Y-%m-%d %H:%M:%S")
+        active_ticket['duration'] = int((now - checkin_time).total_seconds() / 60); active_ticket['checkout_time'] = now.strftime("%Y-%m-%d %H:%M:%S"); active_ticket['status'] = 'closed'
+        ticket_to_update = Ticket(**active_ticket); db_manager.update_ticket(ticket_to_update)
+        history_out = History(vehicle_id=active_ticket['vehicle_id'], plate=data.plate, gate="Gate Cam 1", camera_id=1, event_type="out", ticket_id=active_ticket['id'])
+        db_manager.create_history_event(history_out); print(f"[SERVER] 📝 Đã đóng vé và ghi lịch sử ra cho xe {data.plate}")
+        return {"status": "success", "detail": f"Xe {data.plate} đã được xác nhận ra."}
+    except Exception as e:
+        print(f"[SERVER] ❌ Lỗi khi xác nhận xe ra: {e}"); traceback.print_exc(); raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
 @app.get("/api/history/latest")
 async def get_latest_history():
-    latest_in = db_manager.get_latest_history("in")
-    latest_out = db_manager.get_latest_history("out")
+    latest_in = db_manager.get_latest_history("in"); latest_out = db_manager.get_latest_history("out")
+    return {"latest_in": _enrich_history(latest_in), "latest_out": _enrich_history(latest_out)}
 
-    # 👇 THAY THẾ TOÀN BỘ HÀM enrich_history BẰNG ĐOẠN NÀY 👇
-    def enrich_history(history: dict | None):
-        if not history:
-            return None
-        
-        plate = history.get("plate")
-        vehicle = db_manager.get_vehicle_by_plate(plate) if plate else None
-        
-        # Lấy thêm thông tin vé để hiển thị ticket_type
-        ticket = None
-        ticket_id = history.get("ticket_id")
-        if ticket_id:
-            ticket = db_manager.get_ticket_by_id(ticket_id)
-
-        # Gộp thông tin lại
-        enriched_data = {
-            "history": history,
-            "vehicle": vehicle,
-            "ticket": ticket
-        }
-        return enriched_data
-    # 👆 KẾT THÚC PHẦN THAY THẾ 👆
-
-    return {
-        "latest_in": enrich_history(latest_in),
-        "latest_out": enrich_history(latest_out)
-    }
+@app.get("/api/history/recent")
+async def get_recent_history(limit: int = 10):
+    """Lấy về một danh sách các sự kiện lịch sử gần đây nhất."""
+    recent_history_events = db_manager.get_recent_history(limit=limit)
+    enriched_results = [_enrich_history(event) for event in recent_history_events]
+    return enriched_results
