@@ -362,3 +362,12 @@ class DatabaseManager:
         except sqlite3.Error as e:
             print(f"Lỗi database khi lấy lịch sử gần đây: {e}")
             return []
+        
+    def get_active_monthly_ticket_by_plate(self, plate: str) -> Optional[Ticket]:
+        """Lấy vé tháng đang hoạt động (chưa hết hạn) của một biển số xe."""
+        # Lưu ý: Logic 'hết hạn' có thể phức tạp hơn, 
+        # ở đây ta giả định 'active' là đủ.
+        sql = "SELECT * FROM tickets WHERE plate = ? AND status = 'active' AND ticket_type = 'monthly'"
+        with self._get_connection() as conn:
+            row = conn.execute(sql, (plate,)).fetchone()
+            return Ticket(**row) if row else None
