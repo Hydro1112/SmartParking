@@ -25,8 +25,8 @@ HISTORY_LEN = 5       # kích thước cửa sổ bỏ phiếu
 MIN_VOTES = 3         # số phiếu tối thiểu để chấp nhận một biển số
 # -----------------------------------------------------
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda')
 
 def _tensor_from_bgr(img_bgr):
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
