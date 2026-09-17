@@ -6,8 +6,10 @@ from vietocr.tool.predictor import Predictor
 from vietocr.tool.config import Cfg
 from PIL import Image
 import numpy as np # Thêm import numpy
+from pathlib import Path
 
 _predictor = None  # Biến global, lưu model VietOCR
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def get_ocr():
     """
@@ -16,7 +18,7 @@ def get_ocr():
     global _predictor
     if _predictor is None:
         config = Cfg.load_config_from_name('vgg_transformer')
-        config['weights'] = 'server/models/transformerocr.pth'
+        config['weights'] = str(PROJECT_ROOT / 'server/models/transformerocr.pth')
         config['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
         _predictor = Predictor(config)
     return _predictor

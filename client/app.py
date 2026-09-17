@@ -173,10 +173,11 @@ class App(ParkingDashboard):
         if plate in self.active_popups: self.active_popups.remove(plate)
     def show_ticket_popup(self, car_id, plate, vehicle_type, vehicle_image_b64):
         msg = QMessageBox(self); msg.setWindowTitle("Xác Nhận Xe Vào"); msg.setText(f"<b>Xe:</b> {vehicle_type or 'N/A'}<br><b>Biển số:</b> {plate}<br><br>Vui lòng chọn loại vé:"); msg.setTextFormat(Qt.RichText)
-        vis_btn = msg.addButton("Vé Vãng Lai", QMessageBox.ActionRole); mon_btn = msg.addButton("Vé Tháng", QMessageBox.ActionRole); msg.addButton("Hủy", QMessageBox.RejectRole)
+        hourly_btn = msg.addButton("Vé Lượt", QMessageBox.ActionRole); daily_btn = msg.addButton("Vé Ngày", QMessageBox.ActionRole); mon_btn = msg.addButton("Vé Tháng", QMessageBox.ActionRole); msg.addButton("Hủy", QMessageBox.RejectRole)
         def on_close():
             self._mark_popup_closed(plate); clicked = msg.clickedButton()
-            if clicked == vis_btn: t_type = "hourly"
+            if clicked == hourly_btn: t_type = "hourly"
+            elif clicked == daily_btn: t_type = "daily"
             elif clicked == mon_btn: t_type = "monthly"
             else: return
             asyncio.create_task(self.choose_ticket(car_id, plate, vehicle_type, t_type, vehicle_image_b64))

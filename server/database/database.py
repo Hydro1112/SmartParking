@@ -7,11 +7,12 @@ import uuid
 DB_PATH = Path(__file__).resolve().parent / "parking.db"
 
 def get_connection():
-   
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
 
     # BẢNG 1: Thông tin bãi xe
@@ -106,6 +107,8 @@ def init_db():
     conn.close()
 
 def seed_data():
+    # Seed data is inserted in an order intended for a blank demo database.
+    # Keep compatibility with that order; the runtime manager enforces foreign keys.
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 

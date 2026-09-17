@@ -1,6 +1,5 @@
 import sqlite3
 import datetime
-from pathlib import Path
 from typing import List, Optional, Any
 
 # --- ĐỊNH NGHĨA CÁC LỚP MODEL DỮ LIỆU ---
@@ -92,6 +91,7 @@ class DatabaseManager:
     def _get_connection(self) -> sqlite3.Connection:
         """Tạo và trả về một kết nối đến database."""
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
         # Trả về kết quả dưới dạng dictionary-like object thay vì tuple
         conn.row_factory = sqlite3.Row
         return conn
@@ -202,7 +202,12 @@ class DatabaseManager:
             
     def get_active_ticket_by_plate(self, plate: str) -> Optional[Ticket]:
         """Lấy vé đang hoạt động (chưa ra) của một biển số xe."""
-        sql = "SELECT * FROM tickets WHERE plate = ? AND status = 'active'"
+        sql = """
+            SELECT * FROM tickets
+            WHERE plate = ? AND status = 'active'
+            ORDER BY checkin_time DESC
+            LIMIT 1
+        """
         with self._get_connection() as conn:
             row = conn.execute(sql, (plate,)).fetchone()
             return Ticket(**row) if row else None

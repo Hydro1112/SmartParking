@@ -7,7 +7,7 @@ from torchvision.models.detection import fasterrcnn_resnet50_fpn, fasterrcnn_mob
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from ultralytics import YOLO
 import base64
-import uuid  # ✨ THÊM IMPORT
+from pathlib import Path
 from server.utils.readLicensePlate import readLicensePlate
 from server.sort.sort import Sort
 
@@ -25,8 +25,8 @@ HISTORY_LEN = 5       # kích thước cửa sổ bỏ phiếu
 MIN_VOTES = 3         # số phiếu tối thiểu để chấp nhận một biển số
 # -----------------------------------------------------
 
-# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-device = torch.device('cuda')
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def _tensor_from_bgr(img_bgr):
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
@@ -37,8 +37,8 @@ def _init_models():
     """Tải YOLO + Faster R-CNN một lần."""
     try:
         # Xác định thiết bị (device)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"[INIT_MODELS] Thiết bị được sử dụng: {device}")
+        model_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[INIT_MODELS] Thiết bị được sử dụng: {model_device}")
 
         # Faster R-CNN (2 lớp: background + plate)
         model_frcnn = fasterrcnn_mobilenet_v3_large_fpn(weights=None)
@@ -46,22 +46,22 @@ def _init_models():
         model_frcnn.roi_heads.box_predictor = FastRCNNPredictor(in_features, 2)
         model_frcnn.load_state_dict(
             torch.load(
-                "server/models/faster_rcnn_mobilenetv3_stable_v4.pth",
-                map_location=device,
+                PROJECT_ROOT / "server/models/faster_rcnn_mobilenetv3_stable_v4.pth",
+                map_location=model_device,
                 weights_only=True
             )
         )
-        model_frcnn.to(device).eval()
+        model_frcnn.to(model_device).eval()
         print("[INIT_MODELS] Đã tải mô hình Faster R-CNN thành công.")
 
         # YOLO
-        model_yolo = YOLO("server/models/yolov8n.pt")
-        model_yolo.to(device)
+        model_yolo = YOLO(str(PROJECT_ROOT / "server/models/yolov8n.pt"))
+        model_yolo.to(model_device)
         print("[INIT_MODELS] Đã tải mô hình YOLO thành công.")
 
         # Bước 3: Bây giờ mới chuyển sang half-precision nếu dùng CUDA
         YOLO_HALF = False
-        if device.type == "cuda":
+        if model_device.type == "cuda":
             try:
                 YOLO_HALF = True
                 print("[INIT_MODELS] Mô hình YOLO sẽ được chạy ở half-precision (float16).")
@@ -164,17 +164,6 @@ class PlateDetector:
                 plate_text, plate_conf = readLicensePlate(detect_img, ox1, oy1, ox2, oy2)
                 if not plate_text:
                     continue
-
-                # Bỏ phiếu
-                if car_id not in self.car_plate_history:
-                    self.car_plate_history[car_id] = deque(maxlen=HISTORY_LEN)
-                self.car_plate_history[car_id].append(plate_text)
-                votes = Counter(self.car_plate_history[car_id])
-                best_text, best_count = votes.most_common(1)[0]
-
-                # Trong class PlateDetector, phương thức process:
-
-                # ... (phần code detect giữ nguyên) ...
 
                 # Bỏ phiếu
                 if car_id not in self.car_plate_history:
